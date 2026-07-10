@@ -156,6 +156,48 @@ def test_console_requires_build(tmp_path):
         state.prove()
 
 
+def test_build_structured_from_visual_editor(tmp_path):
+    from agentproof.spec import ConstraintKind
+
+    state = StudioState(tmp_path)
+    snap = state.build_structured({
+        "name": "Payments Ops Agent",
+        "capabilities": [{"description": "Process customer refunds"},
+                         {"description": "Look up customer accounts"}],
+        "guardrails": {"spend_limit": True, "pii_egress": True, "prompt_injection": True},
+        "spend_threshold": 200,
+    })
+    assert state.spec.name == "Payments Ops Agent"
+    assert len(state.spec.capabilities) == 2
+    kinds = {c.kind for c in state.spec.constraints}
+    assert ConstraintKind.SPEND_LIMIT in kinds
+    assert ConstraintKind.PII_EGRESS in kinds
+    # Spend limit implies an approval escape hatch.
+    assert ConstraintKind.APPROVAL_REQUIRED in kinds
+    assert state.spec.auto_refund_limit == 200.0
+    # The text view is kept in sync with readable, re-parseable prose.
+    assert "Payments Ops Agent" in state.spec_text
+    assert "$200" in state.spec_text
+    assert snap["graph"]
+
+    # And it verifies to shippable like any other build.
+    state.simulate()
+    state.apply_autofix()
+    assert all(r.passed for r in state.results)
+
+
+def test_build_structured_coerces_bad_threshold(tmp_path):
+    state = StudioState(tmp_path)
+    # A non-numeric threshold from the UI must not crash.
+    state.build_structured({
+        "name": "X",
+        "capabilities": [{"description": "do a thing"}],
+        "guardrails": {"spend_limit": True},
+        "spend_threshold": "lots",
+    })
+    assert state.spec.auto_refund_limit == 50.0  # safe default
+
+
 def test_tool_editing_add_update_remove(tmp_path):
     from agentproof.graph import NodeType
 
