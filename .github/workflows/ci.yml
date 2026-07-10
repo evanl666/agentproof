@@ -49,6 +49,13 @@ jobs:
           agentproof middleware /tmp/fintech -o /tmp/guards.py
           python -c "import sys; sys.path.insert(0,'/tmp'); import guards; assert guards.authorize_spend(5000) is False"
           agentproof playground -o /tmp/playground.html
+      - name: Generic domains (coding/sql/sales — not just refund)
+        run: |
+          for pack in coding sql sales; do
+            agentproof build --pack $pack -o /tmp/$pack
+            agentproof fix /tmp/$pack
+            agentproof prove /tmp/$pack --check
+          done
       - name: Infer + compile + movie (generic, any agent/API)
         run: |
           agentproof infer examples/existing_langgraph_agent.py -o /tmp/inferred.spec.md

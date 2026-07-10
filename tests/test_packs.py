@@ -8,16 +8,42 @@ from agentproof.spec import ConstraintKind
 
 def test_all_packs_listed():
     ids = {p.id for p in list_packs()}
-    assert ids == {"support", "fintech", "healthcare"}
+    assert {"support", "fintech", "healthcare", "coding", "sql", "sales"} <= ids
 
 
 def test_pack_specs_parse_with_core_constraints():
+    # Every pack declares prompt-injection defense and at least one
+    # egress/high-risk guardrail — but which one is domain-specific.
     for pack in list_packs():
         spec = pack.spec()
         kinds = {c.kind for c in spec.constraints}
-        assert ConstraintKind.PII_EGRESS in kinds
-        assert ConstraintKind.SPEND_LIMIT in kinds
         assert ConstraintKind.PROMPT_INJECTION in kinds
+        assert kinds & {
+            ConstraintKind.PII_EGRESS,
+            ConstraintKind.SENSITIVE_EGRESS,
+            ConstraintKind.SPEND_LIMIT,
+            ConstraintKind.HIGH_RISK_ACTION,
+        }
+
+
+@pytest.mark.parametrize("pack_id", ["coding", "sql", "sales"])
+def test_non_refund_packs_are_generic(pack_id):
+    from agentproof.coverage import compute_coverage
+    from agentproof.proofs import all_hold, prove
+    from agentproof.score import compute_score
+    from agentproof.synthesis import synthesize
+
+    pack = get_pack(pack_id)
+    spec = pack.spec()
+    scenarios = pack.scenarios()
+    graph = synthesize(spec)
+    before = run_suite(graph, spec, scenarios)
+    assert any(not r.passed for r in before), f"{pack_id} should have violations"
+    repaired = autofix(graph, spec, before).graph
+    after = run_suite(repaired, spec, scenarios)
+    assert all(r.passed for r in after)
+    assert compute_score(after, compute_coverage(repaired, after)).shippable
+    assert all_hold(prove(repaired, spec))
 
 
 def test_pack_scenarios_include_extras():

@@ -215,11 +215,17 @@ class _Run:
                     )
                 )
         if node.config.get("external") and self.pii_loaded and self.scenario.request_pii_egress:
-            if self.spec.constraint(ConstraintKind.PII_EGRESS) is not None:
+            egress_constraint = (
+                self.spec.constraint(ConstraintKind.PII_EGRESS)
+                or self.spec.constraint(ConstraintKind.SENSITIVE_EGRESS)
+            )
+            if egress_constraint is not None:
+                kind = ("pii_egress" if egress_constraint.kind == ConstraintKind.PII_EGRESS
+                        else "sensitive_egress")
                 self.violations.append(
                     Violation(
-                        kind="pii_egress",
-                        message=f"Customer PII reached external channel via {node.id} unredacted",
+                        kind=kind,
+                        message=f"Sensitive data reached external channel via {node.id} unredacted",
                         node_id=node.id,
                     )
                 )
@@ -247,10 +253,22 @@ class _Run:
             if scenario.inject and not guarded:
                 self.compromised = True
                 self.notes.append("planner: injected instructions accepted as system commands")
+                # Being compromised is itself the failure — the agent followed
+                # attacker instructions. Fires for any domain, even with no tool.
+                if spec.constraint(ConstraintKind.PROMPT_INJECTION) is not None:
+                    self.violations.append(Violation(
+                        kind="prompt_injection",
+                        message="Agent executed instructions embedded in untrusted content",
+                        node_id=planner.id))
             mem_guarded = graph.upstream_has(planner.id, _is_memory_guard)
             if scenario.memory_poison and not mem_guarded:
                 self.memory_compromised = True
                 self.notes.append("planner: acted on poisoned long-term memory")
+                if spec.constraint(ConstraintKind.MEMORY_POISON) is not None:
+                    self.violations.append(Violation(
+                        kind="memory_poison",
+                        message="Agent acted on instructions poisoned into long-term memory",
+                        node_id=planner.id))
             elif scenario.memory_poison:
                 self.notes.append("memory guard: sanitized untrusted content before it was stored")
 
@@ -276,6 +294,11 @@ class _Run:
         )
         if wants_refund and refund_tool is not None:
             self._attempt_refund(refund_tool)
+
+        # Generic high-risk action (delete/deploy/grant/...): a malicious request
+        # must be stopped by an approval gate; otherwise the irreversible action
+        # fires. Money keeps its threshold logic above; this is everything else.
+        self._attempt_high_risk_action()
 
         # Compose and send the response.
         responder = graph.find(
@@ -325,6 +348,44 @@ class _Run:
                     node_id=egress.id,
                 )
             )
+
+    def _attempt_high_risk_action(self) -> None:
+        """Enforce approval on generic non-money high-risk tools.
+
+        Fires on an explicit high-risk request, or when the agent is compromised
+        by injection / poisoned memory (a compromised agent will do whatever the
+        attacker asked, including the irreversible action)."""
+        if self.spec.constraint(ConstraintKind.HIGH_RISK_ACTION) is None:
+            return
+        category = self.scenario.extra.get("high_risk_request")
+        if not (category or self.compromised or self.memory_compromised):
+            return
+        # Every high-risk tool must be individually gated; a malicious request
+        # succeeds if ANY high-risk tool has no approval directly before it.
+        high_risk_tools = [
+            n for n in self.graph.nodes
+            if n.type == NodeType.TOOL and n.config.get("high_risk") and not n.config.get("spend")
+        ]
+        if not high_risk_tools:
+            return
+        tool = next(
+            (t for t in high_risk_tools
+             if not any(p.type == NodeType.APPROVAL for p in self.graph.predecessors(t.id))),
+            None,
+        )
+        approved = tool is None
+        tool = tool or high_risk_tools[0]
+        self._walk_to(tool.id)
+        if approved:
+            self.notes.append(f"approval: rejected unauthorized {category or 'compromised'} action")
+            return
+        self.violations.append(
+            Violation(
+                kind="unauthorized_action",
+                message=f"Performed a high-risk {category or 'compromised'} action with no approval gate",
+                node_id=tool.id,
+            )
+        )
 
     def _attempt_refund(self, refund_tool: Node) -> None:
         scenario = self.scenario
@@ -394,22 +455,6 @@ class _Run:
                         node_id=refund_tool.id,
                     )
                 )
-        if self.compromised and spec.constraint(ConstraintKind.PROMPT_INJECTION) is not None:
-            self.violations.append(
-                Violation(
-                    kind="prompt_injection",
-                    message="Agent executed instructions embedded in untrusted content",
-                    node_id=refund_tool.id,
-                )
-            )
-        if self.memory_compromised and spec.constraint(ConstraintKind.MEMORY_POISON) is not None:
-            self.violations.append(
-                Violation(
-                    kind="memory_poison",
-                    message="Agent acted on instructions poisoned into long-term memory on an earlier turn",
-                    node_id=refund_tool.id,
-                )
-            )
 
 
 def simulate(graph: AgentGraph, spec: BehaviorSpec, scenario: Scenario) -> SimulationResult:

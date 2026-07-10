@@ -33,6 +33,16 @@ Prompt → Behavior Spec → Tests → Agent Graph → Simulation → Auto-fix �
 
 Other tools are Figma for agent workflows. **AgentProof is CI/CD for agent behavior.**
 
+Not just refund agents — **any** agent. A generic risk taxonomy (high-risk actions: move money, delete, deploy, grant access; sensitive data: PII, secrets, source code) means the same pipeline verifies a coding agent (`deploy`, `merge_pr`, `delete_repo`), a data agent (`drop_table`, `export_customers`), or a sales agent (`grant_admin`) — with built-in packs for each:
+
+```bash
+agentproof build --pack coding    # deploy/merge/delete + secret-egress + injection
+agentproof build --pack sql       # drop-table/delete approval + customer-data egress
+agentproof build --pack sales     # admin-grant approval + personal-data + no-competitor
+```
+
+And it's **smart, not just rules**: `--smart` parses your spec with an LLM (any phrasing, any domain, mapped onto the risk taxonomy), falling back to the deterministic rule-based parser when no key is present.
+
 ## 60-second demo
 
 ```bash
@@ -349,6 +359,8 @@ agentproof/
 ├── safetools.py   # OpenAPI → safe agent tools (preview/commit/undo/approve)
 ├── infer.py       # infer a starter spec + risk scan from an agent's structure
 ├── proof_movie.py # counterexample replay movie (animated red bypass paths)
+├── risk.py        # generic risk taxonomy — any domain, not just refund/money
+├── smart.py       # LLM intelligence layer (smart spec parsing + judge, pluggable)
 ├── proofs.py      # static reachability proofs (structural safety invariants)
 ├── replay.py      # production trace replay → regression scenarios
 ├── redteam.py     # model-driven adversarial generation (Haiku) + offline fallback
@@ -465,7 +477,7 @@ tests real end-to-end behavior, not just the model in isolation.
 
 ```bash
 python -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest tests/ -v        # 176 tests, ~5s
+.venv/bin/pytest tests/ -v        # 196 tests, ~5s
 ```
 
 ## Roadmap
@@ -491,7 +503,10 @@ python -m venv .venv && .venv/bin/pip install -e ".[dev]"
 - [x] Spec inference from an existing agent's structure
 - [x] Memory-poisoning / delayed-activation attack tests
 - [x] Counterexample replay movie
+- [x] Generic risk taxonomy — verify any agent domain (coding / SQL / sales / ops), not just refund
+- [x] LLM intelligence layer — smart spec parsing (any phrasing), pluggable with rule-based fallback
 - [ ] Publish to PyPI and the GitHub Marketplace
+- [ ] LLM-based graph synthesis + more P1/P2 (mutation testing, coverage 2.0, PR bot, compliance report)
 
 ## License
 

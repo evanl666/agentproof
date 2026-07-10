@@ -95,7 +95,14 @@ def cmd_build(args: argparse.Namespace) -> int:
         print(f"{_c(BOLD, f'Using {pack.name} pack')}: {pack.description}")
     else:
         spec_text = Path(args.spec).read_text() if args.spec else DEFAULT_SPEC
-        spec = parse_spec(spec_text)
+        if getattr(args, "smart", False):
+            from agentproof.smart import available, smart_parse_spec
+
+            spec = smart_parse_spec(spec_text)
+            print(_c(DIM, "Parsed with the LLM backend" if available() else
+                    "LLM backend unavailable (no key) — used the rule-based parser"))
+        else:
+            spec = parse_spec(spec_text)
         scenarios = generate_scenarios(spec, seed=args.seed, size=args.size)
     graph = synthesize(spec)
     project = Path(args.out)
@@ -715,7 +722,9 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("build", help="compile a behavior spec into a graph + scenarios")
     p.add_argument("spec", nargs="?", help="spec file (markdown or prose); default example")
     p.add_argument("--pack", choices=sorted(p_.id for p_ in list_packs()),
-                   help="start from a domain scenario pack (support/fintech/healthcare)")
+                   help="start from a domain scenario pack")
+    p.add_argument("--smart", action="store_true",
+                   help="parse the spec with the LLM backend (any phrasing/domain); falls back to rules")
     p.add_argument("-o", "--out", default="./agentproof-project")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--size", type=int, default=50)

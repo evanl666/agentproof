@@ -122,9 +122,29 @@ def prove(graph: AgentGraph, spec: BehaviorSpec) -> list[Proof]:
                 counterexample=bypass or [],
             ))
 
-    # 2. PII can never reach an external channel without redaction.
-    if spec.constraint(ConstraintKind.PII_EGRESS):
-        sources = [n for n in graph.nodes if n.config.get("returns_pii")]
+    # 1b. Generic high-risk actions can never fire without an approval gate.
+    if spec.constraint(ConstraintKind.HIGH_RISK_ACTION) and entry_id:
+        for tool in graph.nodes:
+            if not (tool.config.get("high_risk") and not tool.config.get("spend")):
+                continue
+            bypass = _path_avoiding(
+                graph, entry_id,
+                is_target=lambda n, tid=tool.id: n.id == tid,
+                is_barrier=lambda n: n.type == NodeType.APPROVAL,
+            )
+            holds = bypass is None
+            proofs.append(Proof(
+                kind="high_risk_gated",
+                property=f"every path to {tool.id} passes a human-approval gate",
+                holds=holds,
+                detail=("the high-risk action can't fire without approval"
+                        if holds else "an unapproved path reaches this high-risk action"),
+                counterexample=bypass or [],
+            ))
+
+    # 2. PII / sensitive data can never reach an external channel without redaction.
+    if spec.constraint(ConstraintKind.PII_EGRESS) or spec.constraint(ConstraintKind.SENSITIVE_EGRESS):
+        sources = [n for n in graph.nodes if n.config.get("returns_pii") or n.config.get("sensitive")]
         externals = [n for n in graph.nodes if n.config.get("external")]
         for src in sources:
             for ext in externals:

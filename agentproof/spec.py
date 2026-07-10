@@ -17,7 +17,9 @@ from typing import Any
 class ConstraintKind(str, Enum):
     SPEND_LIMIT = "spend_limit"
     APPROVAL_REQUIRED = "approval_required"
+    HIGH_RISK_ACTION = "high_risk_action"
     PII_EGRESS = "pii_egress"
+    SENSITIVE_EGRESS = "sensitive_egress"
     TOOL_FAILURE = "tool_failure"
     PROMPT_INJECTION = "prompt_injection"
     MEMORY_POISON = "memory_poison"
@@ -155,6 +157,24 @@ def _classify_never(line: str, index: int) -> Constraint:
             kind=ConstraintKind.SPEND_LIMIT,
             description=line,
             params=params,
+        )
+    # Generic sensitive-data egress (beyond PII): secrets, credentials, source code.
+    from agentproof.risk import classify_action, action_needs_approval, is_sensitive
+
+    if is_sensitive(line) and any(w in lowered for w in ("send", "leak", "expose", "share", "external", "email", "post", "reveal")):
+        return Constraint(
+            id=f"never-{index}",
+            kind=ConstraintKind.SENSITIVE_EGRESS,
+            description=line,
+        )
+    # Generic high-risk action (delete, deploy, grant admin, ...) needing approval.
+    category = classify_action(line)
+    if category is not None and action_needs_approval(category):
+        return Constraint(
+            id=f"never-{index}",
+            kind=ConstraintKind.HIGH_RISK_ACTION,
+            description=line,
+            params={"category": category.value},
         )
     # Custom constraint plugins declare themselves via keywords in the line.
     from agentproof.plugins import match_plugin

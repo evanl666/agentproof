@@ -56,12 +56,30 @@ def synthesize(spec: BehaviorSpec) -> AgentGraph:
     tool_ids: list[str] = []
     for capability in spec.capabilities:
         desc = capability.description.lower()
+        matched = False
         for keywords, tool_id, label, config in _TOOL_RULES:
             if any(k in desc for k in keywords) and not graph.has_node(tool_id):
                 graph.add_node(
                     Node(id=tool_id, type=NodeType.TOOL, label=label, config=dict(config))
                 )
                 tool_ids.append(tool_id)
+                matched = True
+        # Generic path: any capability implying a risky action (high-risk verb,
+        # a sensitive-data source, or an external channel) becomes a tool. This
+        # is what makes synthesis domain-agnostic — a coding agent's "deploy" or
+        # a data agent's "delete records" get real, testable tools. A high-risk
+        # verb always wins, even if a keyword rule already matched (so "delete
+        # records" is a destructive action, not just a datasource lookup).
+        from agentproof.risk import infer_tool_risk
+        import re as _re
+
+        risk_cfg = infer_tool_risk(capability.description)
+        interesting = risk_cfg.get("high_risk") or (not matched and (risk_cfg.get("returns_pii") or risk_cfg.get("external")))
+        if interesting and not risk_cfg.get("spend"):
+            tid = _re.sub(r"[^a-z0-9]+", "_", desc).strip("_")[:40] or f"action_{len(tool_ids)}"
+            if not graph.has_node(tid):
+                graph.add_node(Node(id=tid, type=NodeType.TOOL, label=capability.description, config=risk_cfg))
+                tool_ids.append(tid)
 
     # Every agent needs an egress path; default to email response if none inferred.
     if not graph.has_node("send_email"):

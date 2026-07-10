@@ -116,7 +116,7 @@ def _fix_memory_poison(graph: AgentGraph) -> Fix | None:
     )
 
 
-def _fix_pii_egress(graph: AgentGraph) -> Fix | None:
+def _fix_pii_egress(graph: AgentGraph, kind: str = "pii_egress") -> Fix | None:
     external_tools = [
         n for n in graph.nodes if n.type == NodeType.TOOL and n.config.get("external")
     ]
@@ -130,18 +130,19 @@ def _fix_pii_egress(graph: AgentGraph) -> Fix | None:
         guard = Node(
             id=guard_id,
             type=NodeType.GUARD,
-            label="PII redaction",
-            config={"kind": "pii_redaction", "fields": ["email", "address", "phone", "card"]},
+            label="Sensitive-data redaction",
+            config={"kind": "pii_redaction", "fields": ["email", "address", "phone", "card", "secret", "token"]},
         )
         graph.insert_before(tool.id, guard)
         added.append(guard_id)
     if not added:
         return None
+    label = "PII" if kind == "pii_egress" else "sensitive data"
     return Fix(
-        kind="pii_egress",
+        kind=kind,
         description=(
-            "Added PII redaction guard before every external channel: customer "
-            "data is scrubbed before anything leaves the system"
+            f"Added redaction guard before every external channel: {label} "
+            "is scrubbed before anything leaves the system"
         ),
         nodes_added=added,
     )
@@ -219,12 +220,53 @@ def autofix(
         if fix:
             fixes.append(fix)
 
+    if "unauthorized_action" in kinds:
+        fix = _fix_high_risk_action(repaired)
+        if fix:
+            fixes.append(fix)
+    if "sensitive_egress" in kinds:
+        fix = _fix_pii_egress(repaired, kind="sensitive_egress")
+        if fix:
+            fixes.append(fix)
+
     for kind in sorted(k for k in kinds if k.startswith("content_policy_")):
         fix = _fix_content_policy(repaired, kind)
         if fix:
             fixes.append(fix)
 
     return AutofixReport(graph=repaired, fixes=fixes)
+
+
+def _fix_high_risk_action(graph: AgentGraph) -> Fix | None:
+    """Insert a human-approval node before every non-money high-risk tool."""
+    tools = [
+        n for n in graph.nodes
+        if n.type == NodeType.TOOL and n.config.get("high_risk") and not n.config.get("spend")
+    ]
+    added: list[str] = []
+    for tool in tools:
+        # Direct predecessors only — agent-loop back-edges make `upstream_has`
+        # traverse through other tools' gates and falsely report this one gated.
+        if any(p.type == NodeType.APPROVAL for p in graph.predecessors(tool.id)):
+            continue
+        approval = Node(
+            id=f"approval_{tool.id}",
+            type=NodeType.APPROVAL,
+            label=f"Human approval for {tool.label}",
+            config={"escalates_to": "reviewer", "reason": tool.config.get("risk_category", "high_risk")},
+        )
+        graph.insert_before(tool.id, approval)
+        added.append(approval.id)
+    if not added:
+        return None
+    return Fix(
+        kind="unauthorized_action",
+        description=(
+            "Added a human-approval gate before every high-risk action "
+            "(delete/deploy/grant/...): irreversible actions can't fire unapproved"
+        ),
+        nodes_added=added,
+    )
 
 
 def _fix_content_policy(graph: AgentGraph, violation_kind: str) -> Fix | None:
