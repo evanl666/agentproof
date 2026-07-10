@@ -63,6 +63,10 @@ def test_typescript_tests_run_on_node_if_available(tmp_path, spec, fixed_graph, 
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_export_agent_unknown_target_raises(tmp_path, spec, fixed_graph, scenarios):
-    with pytest.raises(KeyError):
-        export_agent("nope", spec, fixed_graph, scenarios, tmp_path)
+def test_export_agent_unknown_target_uses_flexible_exporter(tmp_path, spec, fixed_graph, scenarios, monkeypatch):
+    # Any framework name not in the deterministic registry is handled by the
+    # flexible LLM-assembled exporter (offline scaffold fallback here), not an error.
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    written = export_agent("nope", spec, fixed_graph, scenarios, tmp_path)
+    assert any(p.name == "agent.py" for p in written)
+    assert any(p.name == "policy.py" for p in written)

@@ -11,3 +11,5 @@ agentproof-project/
 exported-agent/
 replay.html
 .DS_Store
+.agentproof-studio/
+.agentproof-server/

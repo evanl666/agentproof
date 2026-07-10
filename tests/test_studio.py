@@ -5,7 +5,7 @@ from http.server import ThreadingHTTPServer
 
 import pytest
 
-from agentproof.studio import DEFAULT_SPEC, StudioState, make_handler
+from agentproof.studio import DEFAULT_SPEC, StudioState, Workspace, make_handler
 
 
 def test_state_build_simulate_fix_export(tmp_path):
@@ -47,24 +47,30 @@ def test_import_into_state(tmp_path, naive_graph):
 
 
 @pytest.fixture
-def studio_server(tmp_path):
-    state = StudioState(tmp_path)
-    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
+def studio_server(tmp_path, monkeypatch):
+    # Deterministic build path in CI (no live model calls from Studio).
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    workspace = Workspace(tmp_path)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(workspace))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     yield f"http://127.0.0.1:{server.server_address[1]}"
     server.shutdown()
 
 
+def _post(base, path, payload):
+    req = urllib.request.Request(
+        base + path,
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req) as res:
+        return json.loads(res.read())
+
+
 def test_http_endpoints(studio_server):
     def post(path, payload):
-        req = urllib.request.Request(
-            studio_server + path,
-            data=json.dumps(payload).encode(),
-            headers={"Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(req) as res:
-            return json.loads(res.read())
+        return _post(studio_server, path, payload)
 
     with urllib.request.urlopen(studio_server + "/") as res:
         assert b"AgentProof Studio" in res.read()
@@ -77,6 +83,37 @@ def test_http_endpoints(studio_server):
 
     snapshot = post("/api/autofix", {})
     assert all(r["passed"] for r in snapshot["results"])
+
+
+def test_multi_project_dashboard_endpoints(studio_server):
+    def post(path, payload):
+        return _post(studio_server, path, payload)
+
+    # Seeded workspace has one project.
+    with urllib.request.urlopen(studio_server + "/api/projects") as res:
+        board = json.loads(res.read())
+    assert board["active"] and len(board["projects"]) == 1
+
+    # Create a second project; it becomes active and the board lists both.
+    board = post("/api/projects/new", {"name": "SQL Agent", "spec_text": DEFAULT_SPEC})
+    assert len(board["projects"]) == 2
+    names = {p["name"] for p in board["projects"]}
+    assert "SQL Agent" in names
+
+    # Build + simulate the active project; its score persists into the store.
+    post("/api/build", {"spec_text": DEFAULT_SPEC})
+    post("/api/simulate", {})
+    with urllib.request.urlopen(studio_server + "/api/projects") as res:
+        board = json.loads(res.read())
+    active = next(p for p in board["projects"] if p["id"] == board["active"])
+    assert active["total"] > 0
+
+    # Switch back to the first project, then delete the second.
+    first = next(p for p in board["projects"] if p["id"] != board["active"])
+    snap = post("/api/projects/switch", {"id": first["id"]})
+    assert "graph" in snap
+    board2 = post("/api/projects/delete", {"id": active["id"]})
+    assert active["id"] not in {p["id"] for p in board2["projects"]}
 
 
 def test_console_capabilities(tmp_path):

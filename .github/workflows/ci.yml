@@ -33,6 +33,18 @@ jobs:
           for t in langgraph openai crewai typescript; do
             agentproof export /tmp/fintech -t $t -o /tmp/export-$t
           done
+      - name: Export to ANY framework (flexible LLM-assembled, offline scaffold in CI)
+        run: |
+          for t in langchain autogen pydantic-ai agno google-adk; do
+            agentproof export /tmp/fintech -t $t -o /tmp/fx-$t --force
+            python -c "import ast; ast.parse(open('/tmp/fx-$t/agent/agent.py').read()); ast.parse(open('/tmp/fx-$t/agent/policy.py').read())"
+            python -m pytest /tmp/fx-$t/tests -q
+          done
+      - name: One-click deploy artifacts (all targets) compile
+        run: |
+          agentproof deploy /tmp/fintech -t all -o /tmp/deploy
+          python -c "import ast; [ast.parse(open('/tmp/deploy/'+f).read()) for f in ['server.py','guards.py','modal_app.py']]"
+          python -c "import sys; sys.path.insert(0,'/tmp/deploy'); import guards; assert guards.authorize_spend(999999, False) is False"
       - name: CI gate (dogfood the GitHub Action's body)
         run: agentproof gate --pack healthcare --autofix --fail-under 85 --badge /tmp/health.svg
       - name: Run the agent live (no export)

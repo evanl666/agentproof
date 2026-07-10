@@ -24,7 +24,7 @@ from agentproof.coverage import compute_coverage
 from agentproof.diff import behavior_diff
 from agentproof.export import export_langgraph
 from agentproof.graph import AgentGraph
-from agentproof.importers import import_generic_json, import_langgraph
+from agentproof.importers import import_generic_json, import_python_agent
 from agentproof.report import CANVAS_CSS, CANVAS_JS
 from agentproof.scenarios import Scenario, generate_scenarios
 from agentproof.score import compute_score
@@ -85,6 +85,45 @@ class StudioState:
             self.baseline_graph = AgentGraph.from_dict(data["baseline_graph"])
         self.scenarios = [Scenario.from_dict(s) for s in data.get("scenarios", [])]
 
+    def load_record(self, record: dict[str, Any]) -> None:
+        """Populate from a team-backend ProjectStore record (same shape as save)."""
+        self.spec_text = record.get("spec_text", DEFAULT_SPEC)
+        self.spec = BehaviorSpec.from_dict(record["spec"]) if record.get("spec") else None
+        self.graph = AgentGraph.from_dict(record["graph"]) if record.get("graph") else None
+        bg = record.get("baseline_graph")
+        self.baseline_graph = AgentGraph.from_dict(bg) if bg else None
+        self.scenarios = [Scenario.from_dict(s) for s in record.get("scenarios", [])]
+        # Restore prior results so a project's score survives a switch/reload
+        # (otherwise persist_active would overwrite the stored score with null).
+        from agentproof.simulator import SimulationResult
+
+        self.results = [SimulationResult.from_dict(r) for r in record.get("results", [])]
+        self.fixes = []
+
+    def to_record(self, project_id: str, name: str) -> dict[str, Any]:
+        """Serialize into a ProjectStore record so the shared dashboard sees scores."""
+        import time
+
+        snap = self.snapshot()
+        record = {
+            "id": project_id,
+            "name": name,
+            "spec_text": self.spec_text,
+            "spec": snap["spec"],
+            "graph": snap["graph"],
+            "baseline_graph": snap["baseline_graph"],
+            "scenarios": snap["scenarios"],
+            "results": snap["results"],
+            "coverage": snap.get("coverage"),
+            "score": snap.get("score"),
+            "policy": snap.get("policy"),
+            "policy_ids": [],
+            "passed": sum(1 for r in self.results if r.passed),
+            "total": len(self.results),
+            "updated_at": time.time(),
+        }
+        return record
+
     def snapshot(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "spec_text": self.spec_text,
@@ -108,11 +147,14 @@ class StudioState:
     # -- actions ----------------------------------------------------------
 
     def build(self, spec_text: str) -> dict[str, Any]:
-        from agentproof.synthesis import synthesize
+        """Generate an agent from whatever the user described — no preset shape.
 
+        When a model key is present this is fully LLM-native: the model reads the
+        prose, infers the capabilities/risks, and designs the tool graph. Offline
+        it falls back to the deterministic compiler so CI stays reproducible."""
         self.spec_text = spec_text
-        self.spec = parse_spec(spec_text)
-        self.graph = synthesize(self.spec)
+        self.spec = self._parse(spec_text)
+        self.graph = self._synthesize(self.spec)
         self.baseline_graph = self.graph.copy()
         self.scenarios = generate_scenarios(self.spec)
         self.results = []
@@ -120,14 +162,43 @@ class StudioState:
         self.save()
         return self.snapshot()
 
+    @staticmethod
+    def _parse(spec_text: str):
+        from agentproof.intelligence import use_llm
+
+        if use_llm():
+            try:
+                from agentproof.smart import smart_parse_spec
+
+                return smart_parse_spec(spec_text)
+            except Exception:  # noqa: BLE001 — fall back to deterministic parse
+                pass
+        return parse_spec(spec_text)
+
+    @staticmethod
+    def _synthesize(spec):
+        from agentproof.intelligence import smart_synthesize, use_llm
+
+        if use_llm():
+            try:
+                return smart_synthesize(spec)
+            except Exception:  # noqa: BLE001 — fall back to deterministic synthesis
+                pass
+        from agentproof.synthesis import synthesize
+
+        return synthesize(spec)
+
     def import_agent(self, content: str, filename: str, spec_text: str | None) -> dict[str, Any]:
         if spec_text:
             self.spec_text = spec_text
-            self.spec = parse_spec(spec_text)
+            self.spec = self._parse(spec_text)
         elif self.spec is None:
-            self.spec = parse_spec(self.spec_text)
+            self.spec = self._parse(self.spec_text)
         if filename.endswith(".py"):
-            self.graph = import_langgraph(content, name=Path(filename).stem)
+            # import_python_agent handles any Python framework (LangGraph,
+            # LangChain, AutoGen, CrewAI, OpenAI/Claude Agent SDK, Semantic
+            # Kernel, Pydantic AI, smolagents, Agno, Google ADK, …).
+            self.graph = import_python_agent(content, name=Path(filename).stem)
         else:
             self.graph = import_generic_json(json.loads(content))
         self.baseline_graph = self.graph.copy()
@@ -320,10 +391,40 @@ textarea {{ width: 100%; height: 46%; background: #0d1117; color: var(--text);
 .turn {{ font-size: 12px; margin: 4px 0; padding: 6px 8px; border-radius: 6px; background: #0d1117; transition: opacity .35s ease; }}
 .replay {{ margin-top: 4px; }}
 .spin {{ color: var(--muted); padding: 20px; }}
+.projbar {{ display: flex; gap: 6px; align-items: center; }}
+.projbar select {{ background: #0d1117; color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 6px 10px; font-size: 13px; max-width: 220px; }}
+.projbar button {{ padding: 6px 10px; }}
+#board {{ position: fixed; inset: 0; background: rgba(1,4,9,.82); z-index: 80; display: none;
+  overflow-y: auto; padding: 40px 24px; }}
+#board.open {{ display: block; }}
+#board .board-inner {{ max-width: 1080px; margin: 0 auto; }}
+#board h2 {{ font-size: 22px; margin-bottom: 4px; }}
+#board .sub {{ color: var(--muted); margin-bottom: 20px; font-size: 13px; }}
+.board-grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }}
+.pcard {{ background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  padding: 16px; cursor: pointer; transition: border-color .15s, transform .15s; position: relative; }}
+.pcard:hover {{ border-color: var(--blue); transform: translateY(-2px); }}
+.pcard.active {{ border-color: var(--purple); box-shadow: 0 0 0 1px var(--purple); }}
+.pcard h3 {{ font-size: 15px; margin-bottom: 10px; padding-right: 60px; }}
+.pcard .grade {{ position: absolute; top: 14px; right: 14px; font-weight: 700; font-size: 20px; }}
+.pcard .pmeta {{ font-size: 12px; color: var(--muted); }}
+.pcard .ship {{ display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 10px; margin-top: 8px; }}
+.pcard .ship.yes {{ background: rgba(46,160,67,.18); color: #3fb950; }}
+.pcard .ship.no {{ background: rgba(248,81,73,.16); color: #f85149; }}
+.board-add {{ display: flex; align-items: center; justify-content: center; border-style: dashed;
+  color: var(--muted); font-size: 14px; min-height: 110px; }}
+#board .bclose {{ position: absolute; top: 20px; right: 28px; font-size: 26px; cursor: pointer; color: var(--muted); }}
 </style></head>
 <body>
 <header style="flex-wrap:wrap">
   <h1>⚡ AgentProof Studio</h1>
+  <div class="projbar">
+    <select id="project-select" title="Switch agent"></select>
+    <button id="btn-newproj" title="New agent">＋</button>
+    <button id="btn-delproj" title="Delete this agent">🗑</button>
+    <button id="btn-board" title="Multi-agent dashboard">▦ Board</button>
+  </div>
   <span class="chip" id="verdict"><b>—</b></span>
   <div class="toolbar">
     <button id="btn-build" class="primary">Build from spec</button>
@@ -374,6 +475,13 @@ textarea {{ width: 100%; height: 46%; background: #0d1117; color: var(--text);
 <div id="console"><div class="chead"><b id="ctitle">Console</b><span class="close" id="cclose">✕</span></div>
   <div class="cbody" id="cbody"></div></div>
 <div id="toast"></div>
+<div id="board"><span class="bclose" id="board-close">✕</span>
+  <div class="board-inner">
+    <h2>Multi-agent dashboard</h2>
+    <div class="sub">Every agent in this workspace, backed by the team store. Click one to open it.</div>
+    <div class="board-grid" id="board-grid"></div>
+  </div>
+</div>
 <script>{CANVAS_JS}</script>
 <script>
 let STATE = null;
@@ -490,15 +598,45 @@ $('btn-policy').addEventListener('click', () => {{
     toast(STATE.policy.open ? STATE.policy.open + ' policy line(s) OPEN' : 'all policy lines satisfied');
   }}
 }});
+const STEP_ICONS = {{guard:'🛡',condition:'⚖',approval:'✋',tool:'🔧',planner:'🧠',responder:'✍',input:'→',output:'✓'}};
+// Animate the message flowing through each component so inter-node
+// communication is visible on the canvas, one hop at a time.
+async function animateFlow(trace) {{
+  if (!STATE || !STATE.graph || !trace || !trace.length) return;
+  svg.querySelectorAll('path[data-edge]').forEach(p => {{
+    p.setAttribute('stroke', '#30363d'); p.setAttribute('stroke-width', '1.5');
+    p.setAttribute('marker-end', 'url(#arrow)');
+  }});
+  svg.querySelectorAll('.node rect').forEach(r => r.setAttribute('fill', '#161b22'));
+  const ids = trace.map(s => s.node_id).filter(Boolean);
+  const violated = false;
+  for (let i = 0; i < ids.length; i++) {{
+    const rect = svg.querySelector(`.node[data-node="${{ids[i]}}"] rect`);
+    if (rect) {{
+      rect.setAttribute('fill', 'rgba(88,166,255,.30)');
+      rect.setAttribute('stroke-width', '3');
+      setTimeout(() => rect.setAttribute('stroke-width', '1.5'), 520);
+    }}
+    if (i > 0) {{
+      const p = svg.querySelector(`path[data-edge="${{ids[i-1]}}->${{ids[i]}}"]`);
+      if (p) {{ p.setAttribute('stroke', '#58a6ff'); p.setAttribute('stroke-width', '2.5');
+               p.setAttribute('marker-end', 'url(#arrow)'); }}
+    }}
+    // Reveal trace lines in lock-step with the canvas so the two views agree.
+    const line = document.getElementById('flow-step-' + i);
+    if (line) line.style.opacity = '1';
+    await new Promise(res => setTimeout(res, 360));
+  }}
+}}
 async function runAgent() {{
   const msg = $('run-msg').value.trim();
   if (!msg) return;
   let r;
   try {{ r = await api('/api/run', {{ message: msg, approved: $('run-approve').checked }}); }}
   catch (e) {{ return toast(e.message); }}
-  const icons = {{guard:'🛡',condition:'⚖',approval:'✋',tool:'🔧',planner:'🧠',responder:'✍',input:'→',output:'✓'}};
+  const icons = STEP_ICONS;
   let html = `<div class="note"><b>user:</b> ${{r.message}}</div>`;
-  html += r.trace.map(s => `<div class="note">${{icons[s.kind]||'·'}} <b>${{s.node_id}}</b>: ${{s.detail}}</div>`).join('');
+  html += r.trace.map((s, i) => `<div class="note" id="flow-step-${{i}}" style="opacity:.25;transition:opacity .3s">${{icons[s.kind]||'·'}} <b>${{s.node_id}}</b>: ${{s.detail}}</div>`).join('');
   html += `<div style="margin-top:6px"><b>agent:</b> ${{r.reply}}</div>`;
   const tags = [];
   if (r.flagged_injection) tags.push(r.trace.some(s=>s.kind==='guard') ? '🛡 injection quarantined' : '⚠ injection LEAKED');
@@ -509,6 +647,7 @@ async function runAgent() {{
   if (tags.length) html += `<div class="note" style="margin-top:4px">${{tags.join(' · ')}}</div>`;
   html += `<div class="note" style="opacity:.6">planner: ${{r.planner}}</div>`;
   $('run-out').innerHTML = html;
+  animateFlow(r.trace);
 }}
 $('btn-run').addEventListener('click', runAgent);
 $('run-msg').addEventListener('keydown', e => {{ if (e.key === 'Enter') runAgent(); }});
@@ -635,12 +774,192 @@ document.querySelectorAll('.cbtn').forEach(btn => btn.addEventListener('click', 
   catch (e) {{ openConsole(TITLES[act], '<div class="violation">'+e.message+'</div>'); }}
 }}));
 
+// ---- multi-agent project switcher + dashboard ----
+let PROJECTS = {{active: null, projects: []}};
+function letterFor(score) {{
+  if (score == null) return '—';
+  const o = (typeof score === 'object') ? score.overall : score;
+  if (o == null) return '—';
+  if (o >= 90) return 'A'; if (o >= 80) return 'B'; if (o >= 70) return 'C';
+  if (o >= 60) return 'D'; return 'F';
+}}
+function gradeColor(g) {{
+  if (!g || g === '—') return 'var(--muted)';
+  if (g === 'A') return '#3fb950';
+  if (g === 'B' || g === 'C') return '#d29922';
+  return '#f85149';
+}}
+function fillSelect() {{
+  const sel = $('project-select'); sel.innerHTML = '';
+  PROJECTS.projects.forEach(p => {{
+    const o = document.createElement('option');
+    o.value = p.id; o.textContent = p.name + (p.score ? '  ·  ' + letterFor(p.score) : '');
+    if (p.id === PROJECTS.active) o.selected = true;
+    sel.appendChild(o);
+  }});
+}}
+async function loadProjects() {{
+  PROJECTS = await api('/api/projects');
+  fillSelect();
+}}
+$('project-select').addEventListener('change', async e => {{
+  STATE = await api('/api/projects/switch', {{id: e.target.value}});
+  PROJECTS.active = e.target.value; STATE.diff = null; render();
+  toast('Switched to ' + e.target.selectedOptions[0].textContent.split('  ·')[0]);
+}});
+$('btn-newproj').addEventListener('click', async () => {{
+  const name = prompt('Name your new agent:', 'Untitled Agent');
+  if (name === null) return;
+  PROJECTS = await api('/api/projects/new', {{name}});
+  fillSelect();
+  STATE = await api('/api/state'); STATE.diff = null; render();
+  toast('Created "' + name + '" — describe it in the spec and Build');
+}});
+$('btn-delproj').addEventListener('click', async () => {{
+  const cur = PROJECTS.projects.find(p => p.id === PROJECTS.active);
+  if (!cur || !confirm('Delete "' + cur.name + '"? This cannot be undone.')) return;
+  PROJECTS = await api('/api/projects/delete', {{id: PROJECTS.active}});
+  fillSelect();
+  STATE = await api('/api/state'); STATE.diff = null; render();
+  toast('Deleted');
+}});
+function renderBoard() {{
+  const grid = $('board-grid'); grid.innerHTML = '';
+  PROJECTS.projects.forEach(p => {{
+    const card = document.createElement('div');
+    card.className = 'pcard' + (p.id === PROJECTS.active ? ' active' : '');
+    const grade = letterFor(p.score);
+    const ship = p.score && p.score.shippable;
+    const pass = (p.passed != null && p.total != null) ? p.passed + '/' + p.total + ' scenarios pass' : 'not simulated';
+    card.innerHTML = '<div class="grade" style="color:' + gradeColor(grade) + '">' + grade + '</div>' +
+      '<h3>' + p.name + '</h3>' +
+      '<div class="pmeta">' + pass + '</div>' +
+      (p.score ? '<span class="ship ' + (ship ? 'yes' : 'no') + '">' + (ship ? '✓ shippable' : '✗ not shippable') + '</span>' : '');
+    card.addEventListener('click', async () => {{
+      STATE = await api('/api/projects/switch', {{id: p.id}});
+      PROJECTS.active = p.id; STATE.diff = null; fillSelect(); render();
+      $('board').classList.remove('open');
+      toast('Opened ' + p.name);
+    }});
+    grid.appendChild(card);
+  }});
+  const add = document.createElement('div');
+  add.className = 'pcard board-add'; add.textContent = '＋ New agent';
+  add.addEventListener('click', () => {{ $('board').classList.remove('open'); $('btn-newproj').click(); }});
+  grid.appendChild(add);
+}}
+$('btn-board').addEventListener('click', async () => {{ await loadProjects(); renderBoard(); $('board').classList.add('open'); }});
+$('board-close').addEventListener('click', () => $('board').classList.remove('open'));
+
 api('/api/state').then(s => {{ STATE = s; render(); }});
+loadProjects();
 </script>
 </body></html>"""
 
 
-def make_handler(state: StudioState):
+class Workspace:
+    """Multi-project layer for Studio, backed by the team ProjectStore.
+
+    One project is *active* at a time (a live StudioState for interactive editing,
+    simulation, red-team, and the console). Every project — active or not — is
+    persisted as a ProjectStore record under the same data dir the hosted team
+    backend uses, so the dashboard, scores, and the team server all read one
+    source of truth. Switching persists the active project, then loads the target.
+    """
+
+    def __init__(self, base_dir: str | Path = "."):
+        from agentproof.server import ProjectStore
+
+        self.base_dir = Path(base_dir)
+        self.store = ProjectStore(self.base_dir / ".agentproof-studio")
+        self.active_id: str | None = None
+        self._state: StudioState | None = None
+        self._names: dict[str, str] = {}
+        self._bootstrap()
+
+    def _bootstrap(self) -> None:
+        projects = self.store.list_projects()
+        if not projects:
+            # Seed from a legacy single-project store if present, else a blank one.
+            legacy = self.base_dir / ".agentproof" / "project.json"
+            name = "My Agent"
+            rec = self.store.create_project(name, spec_text=DEFAULT_SPEC)
+            if legacy.exists():
+                try:
+                    data = json.loads(legacy.read_text())
+                    seeded = StudioState(self.base_dir)
+                    seeded.load()
+                    rec = {**self.store.get_project(rec["id"]),
+                           **seeded.to_record(rec["id"], name)}
+                    self.store._save(rec)
+                except (json.JSONDecodeError, OSError, KeyError):
+                    pass
+            projects = self.store.list_projects()
+        self._names = {p["id"]: p["name"] for p in projects}
+        self.active_id = projects[0]["id"]
+        self._load_active()
+
+    def _load_active(self) -> None:
+        record = self.store.get_project(self.active_id)
+        state = StudioState(self.base_dir)
+        state.load_record(record)
+        self._state = state
+
+    def current(self) -> StudioState:
+        assert self._state is not None
+        return self._state
+
+    def persist_active(self) -> None:
+        """Write the live active project back to the shared store."""
+        if self._state is None or self.active_id is None:
+            return
+        name = self._names.get(self.active_id, "My Agent")
+        record = self._state.to_record(self.active_id, name)
+        self.store._save(record)
+
+    def list(self) -> dict[str, Any]:
+        # Persist first so the active project's score reflects the latest actions.
+        self.persist_active()
+        projects = self.store.list_projects()
+        self._names = {p["id"]: p["name"] for p in projects}
+        return {"active": self.active_id, "projects": projects}
+
+    def switch(self, project_id: str) -> dict[str, Any]:
+        if project_id not in self._names:
+            # Refresh in case it was created elsewhere (team backend).
+            self._names = {p["id"]: p["name"] for p in self.store.list_projects()}
+        if project_id not in self._names:
+            raise KeyError(project_id)
+        self.persist_active()
+        self.active_id = project_id
+        self._load_active()
+        return self.current().snapshot()
+
+    def create(self, name: str, spec_text: str | None = None, pack: str | None = None) -> dict[str, Any]:
+        self.persist_active()
+        rec = self.store.create_project(name or "Untitled Agent", spec_text=spec_text, pack=pack)
+        self._names[rec["id"]] = rec["name"]
+        self.active_id = rec["id"]
+        self._load_active()
+        return self.list()
+
+    def delete(self, project_id: str) -> dict[str, Any]:
+        self.store.delete_project(project_id)
+        self._names.pop(project_id, None)
+        if project_id == self.active_id:
+            remaining = self.store.list_projects()
+            if not remaining:
+                self.create("My Agent", spec_text=DEFAULT_SPEC)
+            else:
+                self.active_id = remaining[0]["id"]
+                self._load_active()
+        return self.list()
+
+
+def make_handler(workspace: Workspace):
+    def state() -> StudioState:
+        return workspace.current()
+
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):  # quiet
             pass
@@ -659,7 +978,9 @@ def make_handler(state: StudioState):
             if self.path in ("/", "/index.html"):
                 self._send(200, _studio_html(), "text/html")
             elif self.path == "/api/state":
-                self._send(200, state.snapshot())
+                self._send(200, state().snapshot())
+            elif self.path == "/api/projects":
+                self._send(200, workspace.list())
             else:
                 self._send(404, {"error": "not found"})
 
@@ -670,51 +991,72 @@ def make_handler(state: StudioState):
             except json.JSONDecodeError:
                 self._send(400, {"error": "invalid JSON"})
                 return
+            # Project management endpoints operate on the workspace, not the state.
+            try:
+                if self.path == "/api/projects/new":
+                    self._send(200, workspace.create(
+                        body.get("name", "Untitled Agent"),
+                        spec_text=body.get("spec_text"),
+                        pack=body.get("pack"),
+                    ))
+                    return
+                if self.path == "/api/projects/switch":
+                    self._send(200, workspace.switch(body["id"]))
+                    return
+                if self.path == "/api/projects/delete":
+                    self._send(200, workspace.delete(body["id"]))
+                    return
+            except (ValueError, KeyError) as exc:
+                self._send(400, {"error": str(exc)})
+                return
+            st = state()
             try:
                 if self.path == "/api/build":
-                    self._send(200, state.build(body["spec_text"]))
+                    result = st.build(body["spec_text"])
                 elif self.path == "/api/import":
-                    self._send(
-                        200,
-                        state.import_agent(
-                            body["content"], body.get("filename", "agent.json"), body.get("spec_text")
-                        ),
+                    result = st.import_agent(
+                        body["content"], body.get("filename", "agent.json"), body.get("spec_text")
                     )
                 elif self.path == "/api/simulate":
-                    self._send(200, state.simulate())
+                    result = st.simulate()
                 elif self.path == "/api/autofix":
-                    self._send(200, state.apply_autofix())
+                    result = st.apply_autofix()
                 elif self.path == "/api/export":
-                    self._send(200, state.export())
+                    result = st.export()
                 elif self.path == "/api/run":
-                    self._send(200, state.run_message(body["message"], body.get("approved", False)))
+                    result = st.run_message(body["message"], body.get("approved", False))
                 elif self.path == "/api/prove":
-                    self._send(200, state.prove())
+                    result = st.prove()
                 elif self.path == "/api/coverage":
-                    self._send(200, state.risk_coverage())
+                    result = st.risk_coverage()
                 elif self.path == "/api/mutate":
-                    self._send(200, state.mutate())
+                    result = st.mutate()
                 elif self.path == "/api/cost":
-                    self._send(200, state.cost(body.get("model", "claude-sonnet-5")))
+                    result = st.cost(body.get("model", "claude-sonnet-5"))
                 elif self.path == "/api/redteam":
-                    self._send(200, state.redteam(body.get("n", 12), body.get("model")))
+                    result = st.redteam(body.get("n", 12), body.get("model"))
                 elif self.path == "/api/audit":
-                    self._send(200, state.audit(body.get("turns", 5), body.get("model")))
+                    result = st.audit(body.get("turns", 5), body.get("model"))
                 elif self.path == "/api/compliance":
-                    self._send(200, state.compliance())
+                    result = st.compliance()
                 elif self.path == "/api/full-audit":
-                    self._send(200, state.full_audit(body.get("model")))
+                    result = st.full_audit(body.get("model"))
                 else:
                     self._send(404, {"error": "not found"})
+                    return
             except (ValueError, KeyError, json.JSONDecodeError) as exc:
                 self._send(400, {"error": str(exc)})
+                return
+            # Persist the mutated active project into the shared team store.
+            workspace.persist_active()
+            self._send(200, result)
 
     return Handler
 
 
 def serve(project_dir: str | Path = ".", port: int = 4517, open_browser: bool = True) -> None:
-    state = StudioState(Path(project_dir))
-    server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(state))
+    workspace = Workspace(Path(project_dir))
+    server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(workspace))
     url = f"http://127.0.0.1:{port}"
     print(f"AgentProof Studio running at {url}  (Ctrl-C to stop)")
     if open_browser:

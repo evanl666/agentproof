@@ -14,11 +14,19 @@ EXPORTERS = {
 }
 
 
-def export_agent(target, spec, graph, scenarios, out_dir):
-    """Export a verified agent to one of the supported frameworks."""
-    if target not in EXPORTERS:
-        raise KeyError(f"Unknown target {target!r}; available: {', '.join(EXPORTERS)}")
-    return EXPORTERS[target](spec, graph, scenarios, out_dir)
+def export_agent(target, spec, graph, scenarios, out_dir, model=None):
+    """Export a verified agent to a framework.
+
+    Known frameworks (langgraph/openai/crewai/typescript) use a deterministic
+    exporter. ANY other framework name (langchain, autogen, pydantic-ai, agno,
+    google-adk, …) is handled by the flexible LLM-assembled exporter — the
+    verified policy core is deterministic, the framework glue is model-written,
+    with an offline scaffold fallback."""
+    if target in EXPORTERS:
+        return EXPORTERS[target](spec, graph, scenarios, out_dir)
+    from agentproof.export.smart_export import export_framework
+
+    return export_framework(target, spec, graph, scenarios, out_dir, model=model)
 
 
 __all__ = [

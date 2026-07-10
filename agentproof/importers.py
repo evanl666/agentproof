@@ -159,8 +159,21 @@ def import_langgraph(source: str, name: str = "Imported LangGraph agent") -> Age
 
 # Decorator names that mark a function as an agent tool, across frameworks:
 # Claude Agent SDK (@tool), OpenAI Agents SDK (@function_tool / @beta_tool),
-# GitHub Copilot extensions / LangChain (@tool), CrewAI (@tool), generic (@app.tool).
-_TOOL_DECORATORS = {"tool", "function_tool", "beta_tool", "async_tool", "ai_function", "kernel_function"}
+# LangChain / smolagents / CrewAI (@tool), Pydantic AI (@agent.tool /
+# @agent.tool_plain), Copilot / Semantic Kernel (@kernel_function), LlamaIndex
+# (@FunctionTool.from_defaults is a call, but @tool-style covered), generic.
+_TOOL_DECORATORS = {
+    "tool", "function_tool", "beta_tool", "async_tool", "ai_function",
+    "kernel_function", "tool_plain", "agent_tool", "toolkit", "register_tool",
+}
+# Constructor names whose `tools=[...]` list names the agent's tools: OpenAI
+# Agents SDK, Microsoft AutoGen (AssistantAgent), Agno/Phidata, Google ADK,
+# LlamaIndex (ReActAgent/FunctionAgent), LangChain (create_react_agent).
+_AGENT_CONSTRUCTORS = (
+    "Agent", "AssistantAgent", "ConversableAgent", "ReActAgent", "FunctionAgent",
+    "FunctionCallingAgent", "Assistant", "Swarm", "Team", "Crew",
+)
+_AGENT_TOOL_FUNCS = ("create_react_agent", "create_tool_calling_agent", "initialize_agent")
 
 
 def _decorator_name(dec: ast.AST) -> str | None:
@@ -186,11 +199,44 @@ def import_python_agent(source: str, name: str = "Imported agent") -> AgentGraph
     """
     tree = ast.parse(source)
     tool_names: list[str] = []
+
+    def _add(name: str) -> None:
+        if name and name not in tool_names:
+            tool_names.append(name)
+
+    # 1. Decorated tool functions/methods (@tool, @function_tool, @agent.tool, ...).
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             if any(_decorator_name(d) in _TOOL_DECORATORS for d in node.decorator_list):
-                if node.name not in tool_names:
-                    tool_names.append(node.name)
+                _add(node.name)
+
+    # 2. Functions passed in a `tools=[...]` list to an agent constructor
+    #    (AutoGen, Agno, Google ADK, LlamaIndex, LangChain, OpenAI Agents SDK).
+    def _names_from_list(lst: ast.AST) -> None:
+        if not isinstance(lst, ast.List):
+            return
+        for el in lst.elts:
+            if isinstance(el, ast.Name):
+                _add(el.id)
+            elif isinstance(el, ast.Call) and isinstance(el.func, ast.Name):
+                _add(el.func.id)  # e.g. FunctionTool(my_fn) — best effort
+            elif isinstance(el, ast.Attribute):
+                _add(el.attr)
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        callee = func.id if isinstance(func, ast.Name) else (func.attr if isinstance(func, ast.Attribute) else "")
+        is_ctor = callee in _AGENT_CONSTRUCTORS or callee in _AGENT_TOOL_FUNCS
+        if not is_ctor:
+            continue
+        for kw in node.keywords:
+            if kw.arg in ("tools", "functions"):
+                _names_from_list(kw.value)
+        # create_react_agent(llm, tools) — positional tools list
+        for arg in node.args:
+            _names_from_list(arg)
 
     graph = AgentGraph(name=name)
     graph.add_node(Node(id="input", type=NodeType.INPUT, label="User request"))

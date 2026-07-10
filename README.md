@@ -255,6 +255,8 @@ A local web workbench (**Python stdlib only — no npm, no build step, no cloud*
 - **⚡ Full audit** — one button runs *everything* (proofs, coverage, mutation, cost, red-team, AI audit, compliance) and returns a single SHIPPABLE / NOT-SHIPPABLE verdict with the blocking issues.
 - **Analysis console** — or run one capability at a time into a slide-out panel: 🔒 reachability **proofs**, 📊 risk **coverage 2.0**, 🧬 **mutation** testing, 💰 **cost** projection, 🎯 LLM **red-team**, 🤖 the autonomous **AI audit**, and a 📋 **compliance** report.
 - **Animated attack replay** — a breached AI-audit finding plays back turn by turn: watch the attacker's messages and your agent's replies unfold like a live conversation, ending in 💥 breach.
+- **Multi-agent dashboard** — a project switcher and **▦ Board** view manage many agents in one workspace, each as a card with its grade and shippable status. It's backed by the same team ProjectStore as `agentproof serve`, so the Studio, the dashboard, and the hosted backend all read one source of truth.
+- **Live flow animation** — running a message lights each component in turn on the canvas as the message hops through it, so inter-node communication (planner → gate → tool → guard → output) is visible, not just logged.
 
 
 ## Import agents you already have
@@ -269,19 +271,48 @@ agentproof simulate ./agentproof-project
 agentproof fix ./agentproof-project
 ```
 
-Supported importers — **7 frameworks**:
+Supported importers — **13+ frameworks**:
 
 | Framework | How it's imported |
 |---|---|
 | **LangGraph** | Python AST — `add_node` / `add_edge` / `add_conditional_edges` |
+| **LangChain** | Python AST — `@tool` functions + `create_tool_calling_agent(tools=[...])` |
+| **AutoGen** | Python AST — functions passed to `ConversableAgent`/`AssistantAgent` |
+| **CrewAI** | Python AST — `@tool` functions + `Agent`/`Crew` constructors |
 | **Claude Agent SDK** | Python AST — `@tool`-decorated functions + MCP servers |
 | **OpenAI Agents SDK** | Python AST — `@function_tool` functions + `Agent(tools=[...])` |
 | **GitHub Copilot / Semantic Kernel** | Python AST — `@kernel_function` / `@ai_function` |
+| **Pydantic AI** | Python AST — `@agent.tool` / `@agent.tool_plain` |
+| **smolagents** | Python AST — `@tool` + `CodeAgent(tools=[...])` |
+| **Agno** | Python AST — `@tool` + `Agent(tools=[...])` |
+| **Google ADK** | Python AST — functions passed to `Agent(tools=[...])` |
 | **n8n** | workflow JSON — edges from the `connections` map |
 | **Dify** | DSL JSON/YAML — `workflow.graph.{nodes,edges}` |
 | **Flowise / OpenAI Agent Builder** | chatflow / ReactFlow JSON |
 
 `import_agent(path)` sniffs the format automatically. Your hand-written agent gets attacked by the simulation arena, repaired, and re-exported — with the guards it was missing. Every exporter's output is verified by **actually running it**: the LangGraph app invokes end-to-end, the CrewAI and OpenAI tools enforce the policy gate through their real SDKs, and the TypeScript agent passes under `node --test`.
+
+### Export to *any* framework — not a fixed list
+
+`langgraph`, `openai`, `crewai`, and `typescript` have deterministic exporters. **Any other framework name** works too — the verified `policy.py` core is generated deterministically (it's the safety contract, and its tests run standalone), while the framework-specific assembly is written by the model from your verified graph:
+
+```bash
+agentproof export proj/ -t langchain      # or autogen, pydantic-ai, agno, google-adk, …
+agentproof export proj/ -t anything-new   # a framework nobody has integrated yet
+```
+
+Nothing is presumed about what your agent looks like: whatever prose you send, the LLM-native compiler designs *that* agent's tools and risk profile — a DevOps agent gets `deploy`/`rollback` gated on approval, an HR agent gets `update_salary` gated on a manager, a refund agent gets a spend limit — none of it hardcoded.
+
+## One-click deploy — ship the verified agent
+
+Verifying an agent only matters if shipping it is easy. `agentproof deploy` emits a guarded FastAPI service (runtime injection/spend/PII guards already applied) plus the config for your platform:
+
+```bash
+agentproof deploy proj/ -t flyio     # fly launch --copy-config && fly deploy
+agentproof deploy proj/ -t all       # Docker · Fly · Railway · Render · Cloud Run · Modal · Heroku
+```
+
+The generated `server.py` refuses embedded instructions, enforces the spend policy before any money moves, and redacts PII before egress — the same contract AgentProof proved, now running behind an HTTP endpoint.
 
 ## Drop it into CI — GitHub Action + score badge
 
@@ -380,7 +411,9 @@ agentproof/
 ├── coverage.py    # node/edge/approval-path coverage
 ├── diff.py        # behavior diff between graph versions
 ├── score.py       # reliability · safety · cost · coverage · autonomy
-├── importers.py   # 7 frameworks: LangGraph/Claude SDK/OpenAI SDK/Copilot/n8n/Dify/Flowise
+├── importers.py   # 13+ frameworks: LangGraph/LangChain/AutoGen/CrewAI/Claude+OpenAI SDK/Copilot/Pydantic AI/smolagents/Agno/Google ADK/n8n/Dify/Flowise
+├── deploy.py      # one-click deploy: guarded FastAPI server + Docker/Fly/Railway/Render/Cloud Run/Modal/Heroku
+├── export/smart_export.py  # export to ANY framework (deterministic policy core + LLM assembly)
 ├── probe.py       # black-box test a live agent over HTTP (no migration)
 ├── agentworld.py  # fake SaaS sandbox (Stripe/Gmail/Salesforce/GitHub/Postgres)
 ├── safetools.py   # OpenAPI → safe agent tools (preview/commit/undo/approve)
@@ -435,7 +468,8 @@ agentproof fix proj/                  # auto-repair + re-verify
 agentproof diff proj/ [--check]       # behavior diff vs baseline
 agentproof policy proj/ [--check]     # policy lines drawn on the graph
 agentproof cost proj/ [--model ...]   # cost projection across models
-agentproof export proj/ -t crewai -o agent/   # langgraph|openai|crewai|typescript
+agentproof export proj/ -t crewai -o agent/   # any framework name (LLM-assembled beyond langgraph|openai|crewai|typescript)
+agentproof deploy proj/ -t flyio  -o deploy/  # docker|flyio|railway|render|cloudrun|modal|heroku|all
 agentproof probe <url> proj/ [--check]          # black-box test a live agent
 agentproof infer agent.py -o spec.md            # infer a spec from an agent
 agentproof sandbox                              # fake SaaS world (AgentWorld)
@@ -447,7 +481,7 @@ agentproof replay traces.jsonl proj/ [--save]   # replay production traffic
 agentproof redteam proj/ [--model ...] [--save] # model/offline attack generation
 agentproof middleware proj/ -o guards.py        # export runtime guards
 agentproof playground -o playground.html        # shareable self-contained demo
-agentproof import agent.py -o proj/   # lift an existing agent (7 frameworks)
+agentproof import agent.py -o proj/   # lift an existing agent (13+ frameworks)
 agentproof report proj/ -o out.html   # canvas replay report
 agentproof commit proj/ -m "..."      # snapshot behavior (team mode)
 agentproof review proj/ 1 2 [--check] # PR-style behavior review
@@ -456,7 +490,7 @@ agentproof badge proj/ -o badge.svg   # Agent Score SVG badge
 agentproof init                       # scaffold spec + CI workflow into a repo
 agentproof serve                      # multi-project team dashboard
 agentproof packs                      # list domain scenario packs
-agentproof studio                     # local single-project visual IDE
+agentproof studio                     # local visual IDE + multi-agent dashboard
 ```
 
 ## Domain scenario packs
@@ -528,7 +562,9 @@ python -m venv .venv && .venv/bin/pip install -e ".[dev]"
 - [x] Cost simulator with per-model pricing tables
 - [x] Team mode: versioned specs, review behavior diffs like PRs
 - [x] Hosted collaboration backend (multi-project dashboard, org policy library)
-- [x] Importers for 7 frameworks: LangGraph, Claude Agent SDK, OpenAI Agents SDK, Copilot/Semantic Kernel, n8n, Dify, Flowise/OpenAI Agent Builder
+- [x] Importers for 13+ frameworks: LangGraph, LangChain, AutoGen, CrewAI, Claude Agent SDK, OpenAI Agents SDK, Copilot/Semantic Kernel, Pydantic AI, smolagents, Agno, Google ADK, n8n, Dify, Flowise/OpenAI Agent Builder
+- [x] Export to any framework (deterministic policy core + LLM-assembled glue) and one-click deploy to Docker/Fly/Railway/Render/Cloud Run/Modal/Heroku
+- [x] Studio multi-agent dashboard backed by the team ProjectStore
 - [x] GitHub Action + Agent Score badge + `agentproof init`
 - [x] Run agents live on the platform — no code export, pluggable local/Claude planner
 - [x] Static reachability proofs (structural safety invariants + counterexamples)

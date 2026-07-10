@@ -815,6 +815,29 @@ def cmd_audit(args: argparse.Namespace) -> int:
     return 1 if report.breached and args.check else 0
 
 
+def cmd_deploy(args: argparse.Namespace) -> int:
+    from agentproof.deploy import generate_deploy
+
+    project = Path(args.project)
+    spec = _load_spec(project)
+    written = generate_deploy(spec, args.target, args.out)
+    print(f"{_c(BOLD, f'Deploy artifacts ({args.target})')} → {args.out}")
+    for p in written:
+        print(f"  {p}")
+    hints = {
+        "flyio": "fly launch --copy-config && fly deploy",
+        "railway": "railway up",
+        "render": "connect the repo on render.com (render.yaml auto-detected)",
+        "cloudrun": "gcloud run deploy --source .",
+        "modal": "modal deploy modal_app.py",
+        "docker": "docker build -t agent . && docker run -p 8080:8080 agent",
+        "heroku": "git push heroku main",
+    }
+    if args.target in hints:
+        print(f"\n  Next: {_c(BOLD, hints[args.target])}")
+    return 0
+
+
 def cmd_studio(args: argparse.Namespace) -> int:
     serve(args.dir, port=args.port, open_browser=not args.no_browser)
     return 0
@@ -924,13 +947,21 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("-o", "--out", default="replay.html")
     p.set_defaults(fn=cmd_report)
 
-    p = sub.add_parser("export", help="export a production agent repo")
+    p = sub.add_parser("export", help="export a production agent repo (any framework)")
     p.add_argument("project")
     p.add_argument("-o", "--out", default="./exported-agent")
-    p.add_argument("-t", "--target", choices=sorted(EXPORTERS), default="langgraph",
-                   help="framework to export (langgraph/openai/crewai/typescript)")
+    p.add_argument("-t", "--target", default="langgraph",
+                   help="framework: langgraph/openai/crewai/typescript (deterministic), "
+                        "or ANY name (langchain/autogen/pydantic-ai/agno/…) via LLM assembly")
     p.add_argument("--force", action="store_true", help="export even with failing scenarios")
     p.set_defaults(fn=cmd_export)
+
+    p = sub.add_parser("deploy", help="generate one-click deploy artifacts (Docker/Fly/Railway/Render/Cloud Run/Modal)")
+    p.add_argument("project")
+    from agentproof.deploy import DEPLOY_TARGETS
+    p.add_argument("-t", "--target", choices=DEPLOY_TARGETS + ["all"], default="docker")
+    p.add_argument("-o", "--out", default="./deploy")
+    p.set_defaults(fn=cmd_deploy)
 
     p = sub.add_parser("packs", help="list domain scenario packs")
     p.set_defaults(fn=cmd_packs)
