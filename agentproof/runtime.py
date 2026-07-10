@@ -83,7 +83,10 @@ class LocalPlanner:
                 amount = float(m.group(1).replace(",", ""))
             except ValueError:
                 amount = None
-        wants_spend = any(w in lowered for w in ("refund", "transfer", "money back", "reimburse", "pay", "wire"))
+        wants_spend = any(w in lowered for w in (
+            "refund", "transfer", "money back", "reimburse", "pay", "wire",
+            "transaction", "payment", "charge", "send $", "credit", "withdraw",
+        ))
         # A quarantined (injected) message never triggers a money action.
         if flagged:
             wants_spend = False
@@ -289,35 +292,36 @@ class AgentRuntime:
         threshold = coerce_threshold(limit.params.get("threshold")) if limit else None
         if decision.wants_spend and spend_tool is not None:
             amount = decision.amount if decision.amount is not None else (threshold or 50.0)
+            action = spend_tool.label  # e.g. "Process Refund", "Wire transfer", "Add account credit"
             condition = g.find(lambda n: n.type == NodeType.CONDITION and "threshold" in n.config)
             approval = g.find(lambda n: n.type == NodeType.APPROVAL)
             if condition is not None:
-                gate = float(condition.config["threshold"])
+                gate = coerce_threshold(condition.config.get("threshold"))
                 trace.append(Step(condition.id, "condition", f"amount ${amount:.2f} vs limit ${gate:.2f}"))
                 if amount <= gate:
                     self._tool(spend_tool)({"amount": amount})
-                    actions.append(f"auto-refunded ${amount:.2f}")
-                    trace.append(Step(spend_tool.id, "tool", f"auto-approved ${amount:.2f}"))
+                    actions.append(f"{action}: ${amount:.2f} auto-approved")
+                    trace.append(Step(spend_tool.id, "tool", f"${amount:.2f} auto-approved"))
                 elif approval is not None and approved_by_human:
                     self._tool(spend_tool)({"amount": amount})
-                    actions.append(f"refunded ${amount:.2f} after approval")
+                    actions.append(f"{action}: ${amount:.2f} after approval")
                     trace.append(Step(approval.id, "approval", "human approved"))
-                    trace.append(Step(spend_tool.id, "tool", f"refunded ${amount:.2f}"))
+                    trace.append(Step(spend_tool.id, "tool", f"${amount:.2f} executed"))
                 elif approval is not None:
                     result.approval_required = True
-                    result.reply = f"A refund of ${amount:.2f} exceeds the ${gate:.2f} auto-limit and needs a human approval."
+                    result.reply = f"${amount:.2f} exceeds the ${gate:.2f} auto-limit and needs human approval."
                     trace.append(Step(approval.id, "approval", "awaiting human decision"))
                     return self._finish(result, trace, actions)
                 else:
                     result.blocked = True
-                    result.reply = f"A refund of ${amount:.2f} is over the ${gate:.2f} limit and cannot be approved automatically."
+                    result.reply = f"${amount:.2f} is over the ${gate:.2f} limit and cannot be approved automatically."
                     return self._finish(result, trace, actions)
             else:
-                # No gate in the graph — the money moves unchecked. A live run
+                # No gate in the graph — the action runs unchecked. A live run
                 # surfaces this so you fix the graph before shipping.
                 self._tool(spend_tool)({"amount": amount})
-                actions.append(f"refunded ${amount:.2f} (NO GATE)")
-                trace.append(Step(spend_tool.id, "tool", f"refunded ${amount:.2f} with no policy gate"))
+                actions.append(f"{action}: ${amount:.2f} — NO GATE")
+                trace.append(Step(spend_tool.id, "tool", f"${amount:.2f} with no policy gate"))
                 if threshold is not None and amount > threshold:
                     result.blocked = True
 

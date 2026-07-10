@@ -183,14 +183,20 @@ def generate_scenarios(spec: BehaviorSpec, seed: int = 42, size: int = 50) -> li
             request_pii_egress=True,
         )
 
-    # Tool failures: every datasource-backed tool times out at least once.
-    for tool in ("lookup_customer", "process_refund", "send_email"):
+    # Tool failures: a tool of each risk role times out at least once. Roles are
+    # resolved against the actual graph at simulation time (see simulator), so this
+    # works for any agent — no tool names are presumed.
+    for role, desc in (
+        ("@datasource", "a data-lookup tool"),
+        ("@action", "a high-risk/action tool"),
+        ("@external", "an external-egress tool"),
+    ):
         add(
             ScenarioCategory.TOOL_FAILURE,
-            f"{tool} times out mid-request",
-            user_message="I want a refund for my $20 order.",
+            f"{desc} times out mid-request",
+            user_message="Please complete my request.",
             amount=20.0,
-            failing_tool=tool,
+            failing_tool=role,
         )
 
     # Cost blowups: long multi-turn conversations.

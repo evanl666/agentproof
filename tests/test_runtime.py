@@ -10,7 +10,7 @@ def _runtime(graph, spec):
 def test_under_limit_auto_refunds(fixed_graph, spec):
     r = _runtime(fixed_graph, spec).run("I want a refund for my $20 order")
     assert not r.blocked
-    assert any("auto-refunded" in a for a in r.actions)
+    assert any("auto-approved" in a for a in r.actions)
     assert not r.approval_required
 
 

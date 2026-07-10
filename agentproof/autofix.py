@@ -13,7 +13,7 @@ from typing import Any
 
 from agentproof.graph import AgentGraph, Node, NodeType
 from agentproof.simulator import SimulationResult
-from agentproof.spec import BehaviorSpec, ConstraintKind
+from agentproof.spec import BehaviorSpec, ConstraintKind, coerce_threshold
 
 
 @dataclass
@@ -40,35 +40,35 @@ class AutofixReport:
 
 
 def _fix_spend_limit(graph: AgentGraph, spec: BehaviorSpec) -> Fix | None:
-    refund_tool = graph.find(lambda n: n.type == NodeType.TOOL and n.config.get("spend"))
+    spend_tool = graph.find(lambda n: n.type == NodeType.TOOL and n.config.get("spend"))
     limit = spec.constraint(ConstraintKind.SPEND_LIMIT)
-    if refund_tool is None or limit is None:
+    if spend_tool is None or limit is None:
         return None
-    threshold = float(limit.params.get("threshold", 50.0))
+    threshold = coerce_threshold(limit.params.get("threshold"))
     condition = Node(
-        id="refund_policy_gate",
+        id="spend_policy_gate",
         type=NodeType.CONDITION,
         label=f"Amount ≤ ${threshold:.2f}?",
         config={"threshold": threshold, "field": "amount"},
     )
-    graph.insert_before(refund_tool.id, condition)
+    graph.insert_before(spend_tool.id, condition)
     approval = Node(
         id="human_approval",
         type=NodeType.APPROVAL,
         label=f"Human approval (> ${threshold:.2f})",
-        config={"escalates_to": "support_manager", "timeout_minutes": 60},
+        config={"escalates_to": "human_approver", "timeout_minutes": 60},
     )
     graph.add_node(approval)
     graph.add_edge(condition.id, approval.id, label=f"> ${threshold:.2f}")
-    graph.add_edge(approval.id, refund_tool.id, label="approved")
+    graph.add_edge(approval.id, spend_tool.id, label="approved")
     responder = graph.find(lambda n: n.type == NodeType.LLM and n.id != "planner")
     if responder is not None:
         graph.add_edge(approval.id, responder.id, label="rejected")
     return Fix(
         kind="policy_violation",
         description=(
-            f"Added refund policy gate: amounts over ${threshold:.2f} now require "
-            "human approval before the refund tool can execute"
+            f"Added spend policy gate: amounts over ${threshold:.2f} now require "
+            "human approval before the money-moving tool can execute"
         ),
         nodes_added=[condition.id, approval.id],
     )
