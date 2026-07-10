@@ -6,7 +6,7 @@ Pipeline: Prompt -> Behavior Spec -> Tests -> Agent Graph -> Simulation
           -> Auto-fix -> Code Export -> CI
 """
 
-__version__ = "0.9.0"
+__version__ = "0.10.0"
 
 from agentproof.spec import BehaviorSpec, Constraint, ConstraintKind, parse_spec
 from agentproof.graph import AgentGraph, Edge, Node, NodeType
@@ -67,6 +67,17 @@ from agentproof.transaction import check_transaction_contracts
 from agentproof.delegation import SubAgent, check_delegation
 from agentproof.prbot import build_review_comment
 from agentproof.compliance import compliance_data, write_compliance
+from agentproof.attack import (
+    AdaptiveAttacker,
+    AttackTranscript,
+    TemplateAttacker,
+    attack_goals,
+    http_multiturn_agent,
+    make_attacker,
+    run_campaign,
+    runtime_agent,
+)
+from agentproof.audit import AuditReport, audit_agent, audit_spec, write_audit
 
 __all__ = [
     "BehaviorSpec",
@@ -180,4 +191,16 @@ __all__ = [
     "build_review_comment",
     "compliance_data",
     "write_compliance",
+    "AdaptiveAttacker",
+    "TemplateAttacker",
+    "AttackTranscript",
+    "attack_goals",
+    "run_campaign",
+    "make_attacker",
+    "http_multiturn_agent",
+    "runtime_agent",
+    "audit_agent",
+    "audit_spec",
+    "AuditReport",
+    "write_audit",
 ]

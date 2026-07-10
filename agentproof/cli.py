@@ -772,6 +772,49 @@ def cmd_packs_search(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_audit(args: argparse.Namespace) -> int:
+    """Autonomous multi-turn security audit — point it at an agent, get a report."""
+    from agentproof.attack import http_multiturn_agent, runtime_agent
+    from agentproof.audit import audit_agent, audit_spec, render_markdown, write_audit
+    from agentproof.runtime import AgentRuntime, default_planner
+
+    project_graph = None
+    if args.pack:
+        spec = get_pack(args.pack).spec()
+    elif args.spec:
+        spec = parse_spec(Path(args.spec).read_text())
+    elif args.project:
+        spec = _load_spec(Path(args.project))
+        project_graph = _load_graph(Path(args.project))  # audit the project's actual (fixed) agent
+    else:
+        spec = parse_spec(DEFAULT_SPEC)
+
+    if args.url:
+        agent = http_multiturn_agent(args.url, field_in=args.field_in)
+        name = args.url
+    else:
+        if project_graph is not None:
+            graph = project_graph
+        else:
+            from agentproof.intelligence import smart_synthesize
+            graph = smart_synthesize(spec)
+        agent = runtime_agent(AgentRuntime(graph, spec, planner=default_planner()))
+        name = spec.name
+
+    print(f"{_c(BOLD, '🔒 Autonomous security audit')} · {name}  (adaptive multi-turn red-team)\n")
+    report = audit_agent(agent, spec, max_turns=args.turns, model=args.model, agent_name=name)
+    print(f"  Verdict: {_c(RED, report.verdict) if report.breached else _c(GREEN, report.verdict)}")
+    print(f"  {_c(DIM, report.summary[:400])}")
+    for f in sorted(report.findings, key=lambda x: not x.succeeded):
+        icon = _c(RED, "🔴 BREACHED") if f.succeeded else _c(GREEN, "🟢 held")
+        extra = f" in {f.turns_to_break} turn(s) → {f.suggested_fix}" if f.succeeded else ""
+        print(f"  {icon} [{f.severity}] {f.goal[:60]}{extra}")
+    if args.out:
+        write_audit(args.out, report, fmt=args.format)
+        print(f"\n  report: {_c(CYAN, args.out)}")
+    return 1 if report.breached and args.check else 0
+
+
 def cmd_studio(args: argparse.Namespace) -> int:
     serve(args.dir, port=args.port, open_browser=not args.no_browser)
     return 0
@@ -1057,6 +1100,19 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("packs-search", help="search the pack registry")
     p.add_argument("query", nargs="?")
     p.set_defaults(fn=cmd_packs_search)
+
+    p = sub.add_parser("audit", help="autonomous multi-turn security audit (AI red-teams your agent)")
+    p.add_argument("url", nargs="?", help="a live agent endpoint to audit; omit to audit a synthesized agent")
+    p.add_argument("--pack", choices=sorted(p_.id for p_ in list_packs()), help="audit a domain pack's agent")
+    p.add_argument("--spec", help="behavior spec to audit against")
+    p.add_argument("--project", help="project to source the spec from")
+    p.add_argument("--field-in", default="message", help="request JSON field for the message")
+    p.add_argument("--turns", type=int, default=6, help="max turns per attack campaign")
+    p.add_argument("--model", help="attacker/judge model (default: cheapest, Haiku)")
+    p.add_argument("-o", "--out", help="write the audit report to a file")
+    p.add_argument("--format", choices=["md", "html"], default="md")
+    p.add_argument("--check", action="store_true", help="exit 1 if any attack succeeds")
+    p.set_defaults(fn=cmd_audit)
 
     p = sub.add_parser("studio", help="launch the local visual IDE")
     p.add_argument("--dir", default=".")

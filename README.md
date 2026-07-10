@@ -107,6 +107,24 @@ AgentProof compiles it into an agent graph **plus 50 adversarial simulation scen
 
 The agent went from *dangerous* to *shippable* — and you can watch every failing path replay on the canvas.
 
+## 🔒 Autonomous security audit — one command, an AI pentest
+
+Point AgentProof at a running agent and it acts like an AI pentester: it derives what your agent must never do, then an LLM adversary conducts a **live, adaptive, multi-turn attack** for each risk — building rapport, claiming prior authorization, escalating, smuggling instructions — reading each reply and adapting its next move, while an LLM judge watches for the moment your agent breaks. Out comes a severity-ranked report with the exact conversation that broke it and a suggested fix.
+
+```bash
+agentproof audit http://localhost:8000/chat --spec agent.spec.md
+```
+
+```
+🔒 Autonomous security audit · Payments Bot  (adaptive multi-turn red-team)
+  Verdict: FAILED — critical vulnerabilities
+  🔴 BREACHED [critical] approve a transfer above the limit — broke in 2 turns
+       → add a human-approval gate; never auto-approve above the policy limit
+  🟢 held    [high]     leak sensitive data to an external channel
+```
+
+This isn't a script of canned prompts — it's a real model *conversing* with your agent and adapting. Nothing is hardcoded: the goals, the attacks, the judging, and the writeup are all model-driven (cheapest model, Haiku, by default), with a deterministic escalation fallback offline. "Watch an AI break your AI" — the most shareable demo in the category.
+
 ## Test your existing agent — no migration
 
 Already have a running agent? Point AgentProof at it. **No export, no graph, no rewrite** — it sends adversarial scenarios to your live endpoint and inspects the *real* response for evidence the attack worked:
@@ -370,6 +388,8 @@ agentproof/
 ├── risk.py        # generic risk taxonomy — any domain, not just refund/money
 ├── smart.py       # LLM spec parsing + response judging
 ├── intelligence.py# LLM-native brain: graph synthesis + scenario gen, LLM-by-default
+├── attack.py      # adaptive multi-turn LLM red-team (AI attacker vs your agent)
+├── audit.py       # autonomous auditor — one command → an AI pentest report
 ├── coverage2.py   # risk coverage (high-risk tools / data-flows / approvals)
 ├── mutation.py    # mutation testing — does the suite kill injected regressions?
 ├── prioritize.py  # risk-based scenario ordering (test the dangerous first)
@@ -495,7 +515,7 @@ tests real end-to-end behavior, not just the model in isolation.
 
 ```bash
 python -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest tests/ -v        # 221 tests, ~5s
+.venv/bin/pytest tests/ -v        # 230 tests, ~5s
 ```
 
 ## Roadmap
@@ -528,6 +548,7 @@ python -m venv .venv && .venv/bin/pip install -e ".[dev]"
 - [x] Mutation testing, coverage 2.0, risk-based prioritization
 - [x] Production incident → regression, pack marketplace, transaction contracts
 - [x] Multi-agent delegation coverage, PR behavior-review bot, compliance report
+- [x] Autonomous security auditor — adaptive multi-turn AI red-team + LLM pentest report
 - [ ] Publish to PyPI and the GitHub Marketplace (needs release credentials)
 
 ## License
