@@ -48,6 +48,28 @@ def test_naive_graph_leaks_live(naive_graph, spec):
     assert r.blocked  # over-limit with no gate is flagged
 
 
+@pytest.mark.parametrize("greeting", ["hey", "hi", "hello there", "thanks", "ok cool"])
+def test_greeting_calls_no_tools(fixed_graph, spec, greeting):
+    r = _runtime(fixed_graph, spec).run(greeting)
+    assert not [s for s in r.trace if s.kind == "tool"], "a greeting must not call tools"
+    assert not r.actions
+    assert not r.redacted_pii
+    assert r.reply
+
+
+def test_substantive_request_still_uses_tools(fixed_graph, spec):
+    r = _runtime(fixed_graph, spec).run("what's the status of my order")
+    assert [s for s in r.trace if s.kind == "tool"], "a real request should exercise tools"
+
+
+def test_claude_planner_parses_needs_tools():
+    d = ClaudePlanner._parse('{"needs_tools": false, "wants_spend": false, "amount": null, "reply": "Hi!"}')
+    assert d.needs_tools is False
+    # Backward compatible: absent needs_tools defaults to True.
+    d2 = ClaudePlanner._parse('{"wants_spend": true, "amount": 30, "reply": "ok"}')
+    assert d2.needs_tools is True
+
+
 def test_trace_and_serialization(fixed_graph, spec):
     r = _runtime(fixed_graph, spec).run("refund my $20 order")
     d = r.to_dict()

@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
 
 from agentproof.graph import AgentGraph, Node, NodeType
-from agentproof.spec import BehaviorSpec, ConstraintKind
+from agentproof.spec import BehaviorSpec, ConstraintKind, coerce_threshold
 
 _INJECTION_MARKERS = (
     "ignore all previous", "ignore your", "system override", "you are now",
@@ -38,12 +38,32 @@ _PII_FIELDS = ("email", "address", "phone", "card", "ssn", "account", "routing")
 _AMOUNT_RE = re.compile(r"\$?\s*([0-9][0-9,]*(?:\.[0-9]+)?)")
 
 
+_GREETINGS = {
+    "hi", "hey", "hello", "yo", "hiya", "howdy", "sup", "hey there", "hello there",
+    "good morning", "good afternoon", "good evening", "thanks", "thank you", "thx",
+    "ty", "ok", "okay", "cool", "great", "bye", "goodbye", "hi there", "hey!",
+}
+
+
+def _is_smalltalk(message: str) -> bool:
+    """A bare greeting / acknowledgement that shouldn't trigger any tool."""
+    m = message.strip().lower().strip("!.? ")
+    if not m:
+        return True
+    if m in _GREETINGS:
+        return True
+    # A couple of words that are all greeting-ish tokens (e.g. "hey hey", "ok thanks").
+    words = m.split()
+    return len(words) <= 3 and all(w.strip("!.,?") in _GREETINGS for w in words)
+
+
 @dataclass
 class PlanDecision:
     wants_spend: bool
     amount: float | None
     reply: str
     rationale: str = ""
+    needs_tools: bool = True  # False for greetings/chitchat: reply, don't act
 
 
 class Planner(Protocol):
@@ -68,14 +88,18 @@ class LocalPlanner:
         if flagged:
             wants_spend = False
             amount = None
-        if wants_spend and amount is not None:
+        smalltalk = _is_smalltalk(message) and not flagged
+        needs_tools = not smalltalk
+        if smalltalk:
+            reply = "Hi! How can I help you today?"
+        elif wants_spend and amount is not None:
             reply = f"Processing your ${amount:.2f} request."
         elif wants_spend:
             reply = "I can help with that — how much is the request for?"
         else:
             reply = "Happy to help with your question."
         return PlanDecision(wants_spend=wants_spend, amount=amount, reply=reply,
-                            rationale="local heuristic")
+                            rationale="local heuristic", needs_tools=needs_tools)
 
 
 class ClaudePlanner:
@@ -114,7 +138,9 @@ class ClaudePlanner:
         system = (
             "You are the planning core of a support agent. Given the contract and "
             "one user message, decide the action. Respond ONLY with JSON: "
-            '{"wants_spend": bool, "amount": number|null, "reply": string}. '
+            '{"needs_tools": bool, "wants_spend": bool, "amount": number|null, "reply": string}. '
+            "needs_tools is false for greetings/small talk/thanks (just reply, call "
+            "nothing); true when the user asks for data or an action. "
             "wants_spend is true only if the user is asking to move money/refund."
         )
         resp = self._client_obj().messages.create(
@@ -137,6 +163,7 @@ class ClaudePlanner:
                     amount=d.get("amount"),
                     reply=str(d.get("reply", "")),
                     rationale="claude",
+                    needs_tools=bool(d.get("needs_tools", True)),
                 )
             except (json.JSONDecodeError, ValueError):
                 pass
@@ -236,18 +263,30 @@ class AgentRuntime:
         if planner_node:
             trace.append(Step(planner_node.id, "planner", decision.rationale or "decided next action"))
 
-        # Customer lookup (loads PII into the working set).
+        # A greeting / small-talk turn: reply, call nothing. (This is the fix for
+        # "I said hey and it called tools.")
+        if not decision.needs_tools:
+            responder = g.find(lambda n: n.type == NodeType.LLM and (not planner_node or n.id != planner_node.id))
+            if responder:
+                trace.append(Step(responder.id, "responder", "composed reply"))
+            out = g.find(lambda n: n.type == NodeType.OUTPUT)
+            if out:
+                trace.append(Step(out.id, "output", "done"))
+            result.reply = decision.reply or "Hi! How can I help?"
+            return self._finish(result, trace, actions)
+
+        # Data lookup that loads sensitive/PII data into the working set.
         lookup = g.find(lambda n: n.type == NodeType.TOOL and n.config.get("returns_pii"))
         pii_loaded = False
         if lookup is not None:
             self._tool(lookup)({})
             pii_loaded = True
-            trace.append(Step(lookup.id, "tool", "looked up customer record (PII loaded)"))
+            trace.append(Step(lookup.id, "tool", f"{lookup.label} — loaded sensitive data"))
 
         # Money action through the spend gate.
         spend_tool = g.find(lambda n: n.type == NodeType.TOOL and n.config.get("spend"))
         limit = spec.constraint(ConstraintKind.SPEND_LIMIT)
-        threshold = float(limit.params.get("threshold", 50.0)) if limit else None
+        threshold = coerce_threshold(limit.params.get("threshold")) if limit else None
         if decision.wants_spend and spend_tool is not None:
             amount = decision.amount if decision.amount is not None else (threshold or 50.0)
             condition = g.find(lambda n: n.type == NodeType.CONDITION and "threshold" in n.config)
@@ -294,7 +333,7 @@ class AgentRuntime:
             trace.append(Step(pii_guard.id, "guard", "redacted PII before egress"))
         if egress is not None:
             self._tool(egress)({})
-            trace.append(Step(egress.id, "tool", "sent response externally"))
+            trace.append(Step(egress.id, "tool", f"{egress.label} — external egress"))
 
         out = g.find(lambda n: n.type == NodeType.OUTPUT)
         if out:
