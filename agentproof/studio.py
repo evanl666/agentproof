@@ -97,6 +97,10 @@ class StudioState:
             coverage = compute_coverage(self.graph, self.results)
             payload["coverage"] = coverage.to_dict()
             payload["score"] = compute_score(self.results, coverage).to_dict()
+        if self.graph and self.spec:
+            from agentproof.policy_lines import policy_summary
+
+            payload["policy"] = policy_summary(self.graph, self.spec)
         return payload
 
     # -- actions ----------------------------------------------------------
@@ -189,6 +193,7 @@ textarea {{ width: 100%; height: 46%; background: #0d1117; color: var(--text);
     <button id="btn-import">Import agent…</button>
     <button id="btn-simulate">▶ Run simulation</button>
     <button id="btn-autofix">🛠 Auto-fix</button>
+    <button id="btn-policy">Policy lines</button>
     <button id="btn-export">Export code</button>
   </div>
 </header>
@@ -311,6 +316,18 @@ $('btn-autofix').addEventListener('click', async () => {{
 $('btn-export').addEventListener('click', async () => {{
   try {{ const r = await api('/api/export', {{}}); toast('Exported ' + r.files.length + ' files to ' + r.exported_to); }}
   catch (e) {{ toast(e.message); }}
+}});
+let policyShown = false;
+$('btn-policy').addEventListener('click', () => {{
+  if (!STATE || !STATE.policy) return toast('Build an agent first');
+  policyShown = !policyShown;
+  drawPolicyLines(svg, STATE.graph, policyShown ? STATE.policy.lines : []);
+  if (policyShown) {{
+    $('detail').innerHTML = '<h3>Policy lines</h3>' + STATE.policy.lines.map(l =>
+      `<div class="${{l.satisfied ? 'note' : 'violation'}}">${{l.satisfied ? '✓' : '✗ OPEN'}} ` +
+      `${{l.source}} ⇒ ${{l.target}}<br>${{l.label}}</div>`).join('');
+    toast(STATE.policy.open ? STATE.policy.open + ' policy line(s) OPEN' : 'all policy lines satisfied');
+  }}
 }});
 $('btn-import').addEventListener('click', () => $('file').click());
 $('file').addEventListener('change', async e => {{

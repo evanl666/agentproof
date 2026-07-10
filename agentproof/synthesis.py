@@ -16,9 +16,13 @@ from agentproof.spec import BehaviorSpec
 # Keyword -> (tool id, label, config) used to infer tools from capabilities.
 _TOOL_RULES: list[tuple[tuple[str, ...], str, str, dict]] = [
     (
-        ("refund", "reimburse", "payment"),
+        # Any verb that moves money — a spend tool that must sit behind a gate.
+        (
+            "refund", "reimburse", "payment", "transfer", "move funds", "wire",
+            "send money", "disburse", "payout", "copay", "charge",
+        ),
         "process_refund",
-        "Process refund",
+        "Move funds / process refund",
         {"spend": True},
     ),
     (

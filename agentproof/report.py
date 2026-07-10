@@ -177,6 +177,35 @@ function highlightResult(svg, result) {
     if (r) r.setAttribute('fill', violated.has(id) ? 'rgba(248,81,73,.25)' : 'rgba(63,185,80,.08)');
   });
 }
+
+// Policy visualizer: draw the contract's policy lines directly on the canvas —
+// green (dashed) when a guard/gate satisfies the constraint, red when it's open.
+function drawPolicyLines(svg, graph, policyLines) {
+  svg.querySelectorAll('.policy-line').forEach(el => el.remove());
+  if (!policyLines || !policyLines.length) return;
+  const pos = layoutGraph(graph);
+  const ns = 'http://www.w3.org/2000/svg';
+  policyLines.forEach(line => {
+    const a = pos[line.source], b = pos[line.target];
+    if (!a || !b) return;
+    const color = line.satisfied ? '#3fb950' : '#f85149';
+    const path = document.createElementNS(ns, 'path');
+    // Arc above the nodes so the policy line reads distinctly from data edges.
+    const x1 = a.x + a.w / 2, x2 = b.x + b.w / 2;
+    const topY = Math.min(a.y, b.y) - 26;
+    path.setAttribute('d', `M ${x1} ${a.y} C ${x1} ${topY}, ${x2} ${topY}, ${x2} ${b.y}`);
+    path.setAttribute('fill', 'none');
+    path.setAttribute('stroke', color);
+    path.setAttribute('stroke-width', line.satisfied ? '2' : '3');
+    path.setAttribute('stroke-dasharray', '6 4');
+    path.setAttribute('opacity', line.satisfied ? '0.55' : '0.9');
+    path.setAttribute('class', 'policy-line');
+    const title = document.createElementNS(ns, 'title');
+    title.textContent = (line.satisfied ? '✓ ' : '✗ OPEN — ') + line.label;
+    path.appendChild(title);
+    svg.appendChild(path);
+  });
+}
 """
 
 _REPORT_JS = """
@@ -214,6 +243,20 @@ function showNodeDetail(node) {
     `<pre class="note" style="white-space:pre-wrap">${JSON.stringify(node.config, null, 2)}</pre>`;
 }
 
+let policyShown = false;
+const policyToggle = document.getElementById('policy-toggle');
+if (policyToggle) policyToggle.addEventListener('click', () => {
+  policyShown = !policyShown;
+  drawPolicyLines(svg, DATA.graph, policyShown ? DATA.policy.lines : []);
+  const d = document.getElementById('detail');
+  if (policyShown && DATA.policy) {
+    d.innerHTML = '<h3>Policy lines</h3>' + DATA.policy.lines.map(l =>
+      `<div class="${l.satisfied ? 'note' : 'violation'}">` +
+      `${l.satisfied ? '✓' : '✗ OPEN'} ${l.source} ⇒ ${l.target}<br>${l.label}</div>`
+    ).join('');
+  }
+});
+
 const firstFail = DATA.results.findIndex(r => !r.passed);
 const idx = firstFail >= 0 ? firstFail : 0;
 if (DATA.results.length) select(idx, list.children[idx]);
@@ -228,15 +271,19 @@ def build_report_html(
     score: AgentScore,
     fixes: list | None = None,
 ) -> str:
+    from agentproof.policy_lines import policy_summary
+
     passed = sum(1 for r in results if r.passed)
     total = len(results)
     total_cost = sum(r.cost_usd for r in results)
+    policy = policy_summary(graph, spec)
     data = {
         "spec": spec.to_dict(),
         "graph": graph.to_dict(),
         "results": [r.to_dict() for r in results],
         "coverage": coverage.to_dict(),
         "score": score.to_dict(),
+        "policy": policy,
     }
     report_js = _REPORT_JS.replace(
         "__DATA__", json.dumps(data).replace("</", "<\\/")
@@ -259,6 +306,9 @@ def build_report_html(
   <span class="chip"><b>{round(coverage.overall * 100)}%</b> coverage</span>
   <span class="chip"><b>${total_cost:.2f}</b> / {total} requests</span>
   <span class="chip {verdict_class}"><b>{verdict}</b> · score {score.overall}</span>
+  <span class="chip {'good' if policy['open'] == 0 else 'bad'}" id="policy-toggle" style="cursor:pointer">
+    <b>{policy['satisfied']}/{policy['total']}</b> policy lines
+  </span>
 </header>
 <div class="layout">
   <div class="panel"><h2>Simulation arena ({total} scenarios)</h2><div id="scenarios"></div></div>

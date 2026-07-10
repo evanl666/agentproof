@@ -184,7 +184,12 @@ agentproof/
 ├── diff.py        # behavior diff between graph versions
 ├── score.py       # reliability · safety · cost · coverage · autonomy
 ├── importers.py   # LangGraph AST / Flowise JSON / generic JSON lifting
-├── export/        # verified graph → production LangGraph repo
+├── export/        # verified graph → LangGraph / OpenAI Agents / CrewAI / TypeScript
+├── pricing.py     # per-model cost simulator (Fable/Opus/Sonnet/Haiku)
+├── packs.py       # domain scenario packs (support / fintech / healthcare)
+├── policy_lines.py# policy visualizer: contract lines drawn on the graph
+├── team.py        # versioned snapshots + PR-style behavior review
+├── llm_sim.py     # optional LLM-in-the-loop simulation (real Claude planner)
 ├── report.py      # self-contained canvas-replay HTML
 ├── studio.py      # local visual IDE (stdlib HTTP, zero deps)
 └── cli.py
@@ -195,32 +200,93 @@ Design principle: **enforcement is verified, not assumed.** Synthesis builds onl
 ## CLI reference
 
 ```
-agentproof demo                      # full pipeline story in one command
-agentproof build spec.md -o proj/    # spec → graph + scenarios
+agentproof demo                       # full pipeline story in one command
+agentproof build spec.md -o proj/     # spec → graph + scenarios
+agentproof build --pack fintech -o proj/   # start from a domain pack
 agentproof simulate proj/ [--check] [--report replay.html]
-agentproof fix proj/                 # auto-repair + re-verify
-agentproof diff proj/ [--check]      # behavior diff vs baseline
-agentproof export proj/ -o agent/    # production LangGraph repo
-agentproof import agent.py -o proj/  # lift an existing agent
-agentproof report proj/ -o out.html  # canvas replay report
-agentproof studio                    # local visual IDE
+agentproof fix proj/                  # auto-repair + re-verify
+agentproof diff proj/ [--check]       # behavior diff vs baseline
+agentproof policy proj/ [--check]     # policy lines drawn on the graph
+agentproof cost proj/ [--model ...]   # cost projection across models
+agentproof export proj/ -t crewai -o agent/   # langgraph|openai|crewai|typescript
+agentproof import agent.py -o proj/   # lift an existing agent
+agentproof report proj/ -o out.html   # canvas replay report
+agentproof commit proj/ -m "..."      # snapshot behavior (team mode)
+agentproof review proj/ 1 2 [--check] # PR-style behavior review
+agentproof packs                      # list domain scenario packs
+agentproof studio                     # local visual IDE
 ```
+
+## Domain scenario packs
+
+Start hardened instead of blank. Each pack ships a behavior contract plus
+domain-specific attacks, so a team in that vertical goes straight to a
+verified baseline:
+
+```bash
+agentproof build --pack fintech -o proj/    # money-movement limits, PII, injection
+agentproof build --pack healthcare -o proj/ # PHI egress, copay limits
+agentproof build --pack support -o proj/    # refund policy, order-data exfiltration
+```
+
+## Export anywhere — no framework lock-in
+
+```bash
+agentproof export proj/ -t langgraph   -o agent/
+agentproof export proj/ -t openai      -o agent/   # OpenAI Agents SDK
+agentproof export proj/ -t crewai      -o agent/   # CrewAI
+agentproof export proj/ -t typescript  -o agent/   # framework-neutral TS
+```
+
+Every target's **policy contract is executable and tested standalone** — the
+Python targets share the same generated `policy.py`; the TypeScript target
+emits an equivalent `policy.ts` plus a dependency-free `node --test` suite.
+
+## Team mode: behavior review like a PR
+
+```bash
+agentproof commit proj/ -m "add approval gate" --author alice
+# ... teammate tweaks the prompt ...
+agentproof commit proj/ -m "reword system prompt" --author bob
+agentproof review proj/ 1 2 --check    # ✅ approve / ⚠️ review / 🚫 block
+```
+
+Two snapshots replay the same scenario suite; the review reports risk movement,
+newly failing scenarios, cost drift, and a go/no-go verdict — exit 1 on block,
+so it drops straight into CI.
+
+## Optional: LLM-in-the-loop simulation
+
+The default simulator is deterministic and free. To stress your *actual*
+model's judgment against the arena, plug a real Claude model in as the planner:
+
+```python
+from agentproof.llm_sim import LLMJudge, simulate_with_llm, available
+if available():                       # anthropic SDK + credentials present
+    judge = LLMJudge(model="claude-sonnet-5")
+    result = simulate_with_llm(graph, spec, scenario, judge)
+```
+
+Strictly opt-in; the structural guards still enforce the contract, so this
+tests real end-to-end behavior, not just the model in isolation.
 
 ## Development
 
 ```bash
 python -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest tests/ -v        # 46 tests, <1s
+.venv/bin/pytest tests/ -v        # 78 tests, ~1s
 ```
 
 ## Roadmap
 
-- [ ] LLM-in-the-loop simulation (plug in real models as the simulated agent)
-- [ ] More export targets: OpenAI Agents SDK, CrewAI, raw TypeScript
-- [ ] Custom scenario packs & domain constraint libraries (fintech, healthcare, support)
-- [ ] Policy visualizer: draw red lines on the canvas ("PII may never reach this node")
-- [ ] Cost simulator with per-model pricing tables
-- [ ] Team mode: share behavior specs, review behavior diffs like PRs
+- [x] LLM-in-the-loop simulation (plug in real models as the simulated agent)
+- [x] More export targets: OpenAI Agents SDK, CrewAI, raw TypeScript
+- [x] Domain scenario packs & constraint libraries (fintech, healthcare, support)
+- [x] Policy visualizer: red/green policy lines drawn on the canvas
+- [x] Cost simulator with per-model pricing tables
+- [x] Team mode: versioned specs, review behavior diffs like PRs
+- [ ] Hosted collaboration backend (shared projects, org-wide policy libraries)
+- [ ] More importers: OpenAI Agent Builder, n8n, Dify exports
 
 ## License
 

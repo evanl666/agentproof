@@ -22,9 +22,12 @@ from agentproof import __version__
 from agentproof.autofix import autofix
 from agentproof.coverage import compute_coverage
 from agentproof.diff import behavior_diff
-from agentproof.export import export_langgraph
+from agentproof.export import EXPORTERS, export_agent, export_langgraph
 from agentproof.graph import AgentGraph
 from agentproof.importers import import_agent
+from agentproof.packs import get_pack, list_packs
+from agentproof.policy_lines import compute_policy_lines
+from agentproof.pricing import MODEL_PRICES, compare_models, project_cost
 from agentproof.report import write_report
 from agentproof.scenarios import Scenario, generate_scenarios
 from agentproof.score import compute_score
@@ -32,6 +35,7 @@ from agentproof.simulator import run_suite
 from agentproof.spec import BehaviorSpec, parse_spec
 from agentproof.studio import DEFAULT_SPEC, serve
 from agentproof.synthesis import synthesize
+from agentproof.team import BehaviorHistory, review
 
 GREEN, RED, YELLOW, CYAN, BOLD, DIM, RESET = (
     "\033[32m", "\033[31m", "\033[33m", "\033[36m", "\033[1m", "\033[2m", "\033[0m",
@@ -70,10 +74,17 @@ def _load_scenarios(project: Path) -> list[Scenario]:
 # -- commands ---------------------------------------------------------------
 
 def cmd_build(args: argparse.Namespace) -> int:
-    spec_text = Path(args.spec).read_text() if args.spec else DEFAULT_SPEC
-    spec = parse_spec(spec_text)
+    if getattr(args, "pack", None):
+        pack = get_pack(args.pack)
+        spec_text = pack.spec_text
+        spec = pack.spec()
+        scenarios = pack.scenarios(seed=args.seed, size=args.size)
+        print(f"{_c(BOLD, f'Using {pack.name} pack')}: {pack.description}")
+    else:
+        spec_text = Path(args.spec).read_text() if args.spec else DEFAULT_SPEC
+        spec = parse_spec(spec_text)
+        scenarios = generate_scenarios(spec, seed=args.seed, size=args.size)
     graph = synthesize(spec)
-    scenarios = generate_scenarios(spec, seed=args.seed, size=args.size)
     project = Path(args.out)
     _save(
         project,
@@ -231,11 +242,83 @@ def cmd_export(args: argparse.Namespace) -> int:
         print(_c(RED, f"Refusing to export: {failed} scenarios still failing."))
         print(f"Run {_c(BOLD, f'agentproof fix {project}')} first, or pass --force.")
         return 1
-    written = export_langgraph(spec, graph, scenarios, args.out)
-    print(f"{_c(BOLD, 'Exported production repo:')} {args.out}")
+    written = export_agent(args.target, spec, graph, scenarios, args.out)
+    print(f"{_c(BOLD, f'Exported {args.target} repo:')} {args.out}")
     for path in written:
         print(f"  {path}")
     return 0
+
+
+def cmd_packs(args: argparse.Namespace) -> int:
+    print(_c(BOLD, "Domain scenario packs:"))
+    for pack in list_packs():
+        print(f"  {_c(CYAN, pack.id):<20} {pack.name} — {pack.description}")
+    print(f"\nUse: {_c(BOLD, 'agentproof build --pack fintech -o proj/')}")
+    return 0
+
+
+def cmd_cost(args: argparse.Namespace) -> int:
+    project = Path(args.project)
+    spec, graph, scenarios = _load_spec(project), _load_graph(project), _load_scenarios(project)
+    results = run_suite(graph, spec, scenarios)
+    report = project_cost(results, model_id=args.model)
+    print(f"{_c(BOLD, 'Cost projection')} · model {report.model_id}")
+    print(f"  total simulated tokens : {report.total_tokens:,}")
+    print(f"  per request            : ${report.per_request_usd:.5f}")
+    print(f"  per 1,000 requests     : ${report.per_1k_requests_usd:.2f}")
+    print(f"  hottest scenario       : {report.hottest_scenario} "
+          f"(${report.hottest_scenario_usd:.5f})")
+    print(f"\n{_c(BOLD, 'Model comparison (per 1,000 requests):')}")
+    for row in compare_models(results):
+        print(f"  {row['display_name']:<20} ${row['per_1k_requests_usd']:.2f}")
+    return 0
+
+
+def cmd_policy(args: argparse.Namespace) -> int:
+    project = Path(args.project)
+    spec, graph = _load_spec(project), _load_graph(project)
+    lines = compute_policy_lines(graph, spec)
+    print(_c(BOLD, "Policy lines (contract drawn on the graph):"))
+    open_count = 0
+    for line in lines:
+        mark = _c(GREEN, "✓") if line.satisfied else _c(RED, "✗ OPEN")
+        if not line.satisfied:
+            open_count += 1
+        print(f"  {mark}  {line.source} ⇒ {line.target}: {line.label}")
+        print(f"        {_c(DIM, line.detail)}")
+    verdict = (
+        _c(GREEN, "all policy lines satisfied")
+        if open_count == 0
+        else _c(RED, f"{open_count} policy line(s) OPEN")
+    )
+    print(f"\n  {verdict}")
+    return 1 if open_count and args.check else 0
+
+
+def cmd_commit(args: argparse.Namespace) -> int:
+    project = Path(args.project)
+    spec, graph, scenarios = _load_spec(project), _load_graph(project), _load_scenarios(project)
+    history = BehaviorHistory(project)
+    snapshot = history.commit(spec, graph, scenarios, author=args.author, message=args.message)
+    print(f"{_c(GREEN, 'Committed')} behavior snapshot "
+          f"{_c(BOLD, f'v{snapshot.version}')} by {snapshot.author}")
+    print(f"  {snapshot.passed}/{snapshot.total} passing · score {snapshot.score['overall']}")
+    if snapshot.version > 1:
+        print(f"\nReview: {_c(BOLD, f'agentproof review {project} {snapshot.version - 1} {snapshot.version}')}")
+    return 0
+
+
+def cmd_review(args: argparse.Namespace) -> int:
+    project = Path(args.project)
+    history = BehaviorHistory(project)
+    if not history.snapshots:
+        print(_c(RED, "No snapshots yet. Run `agentproof commit` first."))
+        return 1
+    base = args.base if args.base is not None else max(1, len(history.snapshots) - 1)
+    head = args.head if args.head is not None else len(history.snapshots)
+    request = review(history, base, head)
+    print(request.render())
+    return 1 if request.verdict == "block" and args.check else 0
 
 
 def cmd_studio(args: argparse.Namespace) -> int:
@@ -308,6 +391,8 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("build", help="compile a behavior spec into a graph + scenarios")
     p.add_argument("spec", nargs="?", help="spec file (markdown or prose); default example")
+    p.add_argument("--pack", choices=sorted(p_.id for p_ in list_packs()),
+                   help="start from a domain scenario pack (support/fintech/healthcare)")
     p.add_argument("-o", "--out", default="./agentproof-project")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--size", type=int, default=50)
@@ -341,11 +426,39 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("-o", "--out", default="replay.html")
     p.set_defaults(fn=cmd_report)
 
-    p = sub.add_parser("export", help="export a production LangGraph repo")
+    p = sub.add_parser("export", help="export a production agent repo")
     p.add_argument("project")
     p.add_argument("-o", "--out", default="./exported-agent")
+    p.add_argument("-t", "--target", choices=sorted(EXPORTERS), default="langgraph",
+                   help="framework to export (langgraph/openai/crewai/typescript)")
     p.add_argument("--force", action="store_true", help="export even with failing scenarios")
     p.set_defaults(fn=cmd_export)
+
+    p = sub.add_parser("packs", help="list domain scenario packs")
+    p.set_defaults(fn=cmd_packs)
+
+    p = sub.add_parser("cost", help="project agent cost across models")
+    p.add_argument("project")
+    p.add_argument("--model", choices=sorted(MODEL_PRICES), default="claude-sonnet-5")
+    p.set_defaults(fn=cmd_cost)
+
+    p = sub.add_parser("policy", help="visualize policy lines drawn on the graph")
+    p.add_argument("project")
+    p.add_argument("--check", action="store_true", help="exit 1 if any policy line is open")
+    p.set_defaults(fn=cmd_policy)
+
+    p = sub.add_parser("commit", help="snapshot the current behavior (team mode)")
+    p.add_argument("project")
+    p.add_argument("-m", "--message", default="", help="snapshot message")
+    p.add_argument("--author", default="unknown")
+    p.set_defaults(fn=cmd_commit)
+
+    p = sub.add_parser("review", help="PR-style behavior review between two snapshots")
+    p.add_argument("project")
+    p.add_argument("base", nargs="?", type=int, default=None, help="base version")
+    p.add_argument("head", nargs="?", type=int, default=None, help="head version")
+    p.add_argument("--check", action="store_true", help="exit 1 if the verdict is block")
+    p.set_defaults(fn=cmd_review)
 
     p = sub.add_parser("studio", help="launch the local visual IDE")
     p.add_argument("--dir", default=".")

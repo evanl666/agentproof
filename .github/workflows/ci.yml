@@ -22,3 +22,13 @@ jobs:
         run: agentproof demo -o /tmp/demo-project
       - name: Agent CI gate (simulate --check must pass on repaired project)
         run: agentproof simulate /tmp/demo-project --check
+      - name: Domain pack + policy + cost + multi-target export
+        run: |
+          agentproof build --pack fintech -o /tmp/fintech
+          agentproof fix /tmp/fintech
+          agentproof policy /tmp/fintech --check
+          agentproof cost /tmp/fintech
+          agentproof commit /tmp/fintech -m baseline --author ci
+          for t in langgraph openai crewai typescript; do
+            agentproof export /tmp/fintech -t $t -o /tmp/export-$t
+          done
