@@ -238,6 +238,9 @@ def build_report_html(
         "coverage": coverage.to_dict(),
         "score": score.to_dict(),
     }
+    report_js = _REPORT_JS.replace(
+        "__DATA__", json.dumps(data).replace("</", "<\\/")
+    )
     fixes_html = ""
     if fixes:
         items = "".join(f'<div class="fixitem">{f.description}</div>' for f in fixes)
@@ -266,7 +269,7 @@ def build_report_html(
   </div>
 </div>
 <script>{CANVAS_JS}</script>
-<script>{_REPORT_JS.replace("__DATA__", json.dumps(data).replace("</", "<\\/"))}</script>
+<script>{report_js}</script>
 </body></html>"""
 
 
