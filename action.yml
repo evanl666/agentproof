@@ -1,0 +1,56 @@
+name: "AgentProof"
+description: "Prove your AI agent behaves before you ship it — adversarial simulation + policy gate in CI."
+author: "evanl666"
+branding:
+  icon: "shield"
+  color: "green"
+
+inputs:
+  spec:
+    description: "Path to the behavior spec (markdown or prose). Ignored if `pack` is set."
+    required: false
+    default: ""
+  pack:
+    description: "Domain scenario pack to use instead of a spec file (support/fintech/healthcare)."
+    required: false
+    default: ""
+  fail-under:
+    description: "Minimum Agent Score (0-100) required to pass."
+    required: false
+    default: "85"
+  autofix:
+    description: "Auto-repair the agent before scoring (true/false)."
+    required: false
+    default: "true"
+  badge:
+    description: "Optional path to write an Agent Score SVG badge."
+    required: false
+    default: ""
+  python-version:
+    description: "Python version to run on."
+    required: false
+    default: "3.11"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+    - name: Install AgentProof
+      shell: bash
+      run: pip install "${{ github.action_path }}"
+    - name: Run AgentProof gate
+      shell: bash
+      run: |
+        args=(gate)
+        if [ -n "${{ inputs.pack }}" ]; then
+          args+=(--pack "${{ inputs.pack }}")
+        elif [ -n "${{ inputs.spec }}" ]; then
+          args+=("${{ inputs.spec }}")
+        fi
+        args+=(--fail-under "${{ inputs.fail-under }}")
+        if [ "${{ inputs.autofix }}" = "true" ]; then args+=(--autofix); fi
+        if [ -n "${{ inputs.badge }}" ]; then args+=(--badge "${{ inputs.badge }}"); fi
+        agentproof "${args[@]}"

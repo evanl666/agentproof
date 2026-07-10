@@ -224,7 +224,14 @@ class _Run:
         graph = self.graph
         spec = self.spec
 
-        self._visit("input")
+        # Enter at the graph's input node — its id is "input" for synthesized
+        # graphs but may differ for imported ones, so find it by type.
+        entry = graph.find(lambda n: n.type == NodeType.INPUT) or (
+            graph.nodes[0] if graph.nodes else None
+        )
+        if entry is None:
+            return SimulationResult(scenario=scenario, passed=True)
+        self._visit(entry.id)
 
         planner = graph.find(lambda n: n.type == NodeType.LLM)
         if planner is not None:

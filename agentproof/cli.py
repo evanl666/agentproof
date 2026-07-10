@@ -18,15 +18,18 @@ import json
 import sys
 from pathlib import Path
 
+import os
+
 from agentproof import __version__
 from agentproof.autofix import autofix
+from agentproof.badge import score_badge, write_badge
 from agentproof.coverage import compute_coverage
 from agentproof.diff import behavior_diff
 from agentproof.export import EXPORTERS, export_agent, export_langgraph
 from agentproof.graph import AgentGraph
-from agentproof.importers import import_agent
+from agentproof.importers import detect_format, import_agent
 from agentproof.packs import get_pack, list_packs
-from agentproof.policy_lines import compute_policy_lines
+from agentproof.policy_lines import compute_policy_lines, policy_summary
 from agentproof.pricing import MODEL_PRICES, compare_models, project_cost
 from agentproof.report import write_report
 from agentproof.scenarios import Scenario, generate_scenarios
@@ -321,6 +324,141 @@ def cmd_review(args: argparse.Namespace) -> int:
     return 1 if request.verdict == "block" and args.check else 0
 
 
+def cmd_badge(args: argparse.Namespace) -> int:
+    project = Path(args.project)
+    spec, graph, scenarios = _load_spec(project), _load_graph(project), _load_scenarios(project)
+    path = write_badge(args.out, spec, graph, scenarios, label=args.label)
+    print(f"Agent Score badge written to {_c(CYAN, str(path))}")
+    return 0
+
+
+def _resolve_spec_and_scenarios(args):
+    """Shared spec/scenario loading for gate: --pack, spec file, or default."""
+    if getattr(args, "pack", None):
+        pack = get_pack(args.pack)
+        return parse_spec(pack.spec_text), pack.spec_text, pack.scenarios()
+    spec_text = Path(args.spec).read_text() if args.spec else DEFAULT_SPEC
+    spec = parse_spec(spec_text)
+    return spec, spec_text, generate_scenarios(spec)
+
+
+def cmd_gate(args: argparse.Namespace) -> int:
+    """One-shot CI gate: build -> optional autofix -> enforce a score threshold.
+
+    Designed to be the body of the AgentProof GitHub Action. Writes a Markdown
+    summary to $GITHUB_STEP_SUMMARY when present, and a badge when asked.
+    """
+    spec, spec_text, scenarios = _resolve_spec_and_scenarios(args)
+    graph = synthesize(spec)
+    fixes = []
+    if args.autofix:
+        results = run_suite(graph, spec, scenarios)
+        report = autofix(graph, spec, results)
+        graph, fixes = report.graph, report.fixes
+
+    results = run_suite(graph, spec, scenarios)
+    coverage = compute_coverage(graph, results)
+    score = compute_score(results, coverage)
+    policy = policy_summary(graph, spec)
+    passed = sum(1 for r in results if r.passed)
+    total = len(results)
+
+    print(f"{_c(BOLD, spec.name)}  ·  gate threshold {args.fail_under}")
+    _print_results(results, coverage, score)
+    if fixes:
+        print(f"  auto-fixes applied: {len(fixes)}")
+
+    failures = []
+    if score.overall < args.fail_under:
+        failures.append(f"Agent Score {score.overall} below threshold {args.fail_under}")
+    if passed < total:
+        failures.append(f"{total - passed} scenario(s) failing")
+    if policy["open"]:
+        failures.append(f"{policy['open']} policy line(s) open")
+
+    _write_step_summary(spec, score, passed, total, policy, fixes, failures)
+    if args.badge:
+        Path(args.badge).write_text(score_badge(score))
+        print(f"  badge: {_c(CYAN, args.badge)}")
+
+    if failures:
+        print(_c(RED, "\nGATE FAILED:"))
+        for f in failures:
+            print(f"  {_c(RED, '✗')} {f}")
+        return 1
+    print(_c(GREEN, "\n✓ GATE PASSED"))
+    return 0
+
+
+def _write_step_summary(spec, score, passed, total, policy, fixes, failures) -> None:
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not summary_path:
+        return
+    verdict = "✅ **SHIPPABLE**" if score.shippable and not failures else "🚫 **BLOCKED**"
+    lines = [
+        f"## ⚡ AgentProof gate — {spec.name}",
+        "",
+        f"{verdict} · Agent Score **{score.overall}/100**",
+        "",
+        "| Metric | Value |",
+        "|---|---|",
+        f"| Tests | {passed}/{total} |",
+        f"| Safety | {score.safety} |",
+        f"| Reliability | {score.reliability} |",
+        f"| Coverage | {score.coverage} |",
+        f"| Policy lines | {policy['satisfied']}/{policy['total']} satisfied |",
+        f"| Auto-fixes applied | {len(fixes)} |",
+    ]
+    if failures:
+        lines += ["", "### Gate failures", *[f"- {f}" for f in failures]]
+    try:
+        with open(summary_path, "a") as fh:
+            fh.write("\n".join(lines) + "\n")
+    except OSError:
+        pass
+
+
+def cmd_serve(args: argparse.Namespace) -> int:
+    from agentproof.server import serve as serve_backend
+
+    serve_backend(args.data_dir, port=args.port, open_browser=not args.no_browser)
+    return 0
+
+
+def cmd_init(args: argparse.Namespace) -> int:
+    """Scaffold AgentProof into an existing repo: spec + CI workflow."""
+    target = Path(args.dir)
+    spec_path = target / "agent.spec.md"
+    if not spec_path.exists() or args.force:
+        spec_path.write_text(DEFAULT_SPEC)
+        print(f"  wrote {_c(CYAN, str(spec_path))}")
+    else:
+        print(f"  {_c(YELLOW, 'kept existing')} {spec_path} (use --force to overwrite)")
+    wf_dir = target / ".github" / "workflows"
+    wf_dir.mkdir(parents=True, exist_ok=True)
+    wf = wf_dir / "agentproof.yml"
+    wf.write_text(_AGENTPROOF_WORKFLOW)
+    print(f"  wrote {_c(CYAN, str(wf))}")
+    print(f"\n{_c(BOLD, 'AgentProof is wired in.')} Edit agent.spec.md, then:")
+    print(f"  {_c(BOLD, 'agentproof gate --spec agent.spec.md --autofix')}")
+    return 0
+
+
+_AGENTPROOF_WORKFLOW = """name: agentproof
+on: [push, pull_request]
+jobs:
+  behavior-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: evanl666/agentproof@main
+        with:
+          spec: agent.spec.md
+          fail-under: '85'
+          autofix: 'true'
+"""
+
+
 def cmd_studio(args: argparse.Namespace) -> int:
     serve(args.dir, port=args.port, open_browser=not args.no_browser)
     return 0
@@ -459,6 +597,33 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("head", nargs="?", type=int, default=None, help="head version")
     p.add_argument("--check", action="store_true", help="exit 1 if the verdict is block")
     p.set_defaults(fn=cmd_review)
+
+    p = sub.add_parser("badge", help="render an Agent Score SVG badge for your README")
+    p.add_argument("project")
+    p.add_argument("-o", "--out", default="agentproof-badge.svg")
+    p.add_argument("--label", default="agentproof")
+    p.set_defaults(fn=cmd_badge)
+
+    p = sub.add_parser("gate", help="one-shot CI gate (build/fix/enforce score threshold)")
+    p.add_argument("spec", nargs="?", help="spec file; default example")
+    p.add_argument("--pack", choices=sorted(p_.id for p_ in list_packs()),
+                   help="use a domain scenario pack instead of a spec file")
+    p.add_argument("--fail-under", type=int, default=85, dest="fail_under",
+                   help="minimum Agent Score to pass (default 85)")
+    p.add_argument("--autofix", action="store_true", help="auto-repair before scoring")
+    p.add_argument("--badge", help="also write an SVG score badge to this path")
+    p.set_defaults(fn=cmd_gate)
+
+    p = sub.add_parser("init", help="scaffold AgentProof into an existing repo")
+    p.add_argument("--dir", default=".")
+    p.add_argument("--force", action="store_true", help="overwrite an existing spec")
+    p.set_defaults(fn=cmd_init)
+
+    p = sub.add_parser("serve", help="launch the multi-project team backend + dashboard")
+    p.add_argument("--data-dir", default=".agentproof-server")
+    p.add_argument("--port", type=int, default=4600)
+    p.add_argument("--no-browser", action="store_true")
+    p.set_defaults(fn=cmd_serve)
 
     p = sub.add_parser("studio", help="launch the local visual IDE")
     p.add_argument("--dir", default=".")

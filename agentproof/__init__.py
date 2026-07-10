@@ -6,7 +6,7 @@ Pipeline: Prompt -> Behavior Spec -> Tests -> Agent Graph -> Simulation
           -> Auto-fix -> Code Export -> CI
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 from agentproof.spec import BehaviorSpec, Constraint, ConstraintKind, parse_spec
 from agentproof.graph import AgentGraph, Edge, Node, NodeType
@@ -22,6 +22,14 @@ from agentproof.packs import ScenarioPack, get_pack, list_packs
 from agentproof.policy_lines import PolicyLine, compute_policy_lines, policy_summary
 from agentproof.team import BehaviorHistory, ReviewRequest, review
 from agentproof.export import export_agent
+from agentproof.badge import render_badge, score_badge, write_badge
+from agentproof.importers import (
+    detect_format,
+    import_agent,
+    import_dify,
+    import_n8n,
+    import_openai_builder,
+)
 
 __all__ = [
     "BehaviorSpec",
@@ -61,4 +69,12 @@ __all__ = [
     "ReviewRequest",
     "review",
     "export_agent",
+    "score_badge",
+    "render_badge",
+    "write_badge",
+    "detect_format",
+    "import_agent",
+    "import_n8n",
+    "import_dify",
+    "import_openai_builder",
 ]

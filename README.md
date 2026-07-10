@@ -104,16 +104,46 @@ A local web workbench (**Python stdlib only — no npm, no build step, no cloud,
 
 ## Import agents you already have
 
-You don't have to build here to prove here:
+You don't have to build here to prove here. AgentProof sniffs the format and lifts your existing agent onto the canvas:
 
 ```bash
 agentproof import my_agent.py --spec contract.md    # LangGraph source (AST analysis)
-agentproof import chatflow.json                     # Flowise export / generic node-edge JSON
+agentproof import chatflow.json                     # Flowise export
+agentproof import workflow.json                     # n8n / Dify / OpenAI Agent Builder
 agentproof simulate ./agentproof-project
 agentproof fix ./agentproof-project
 ```
 
-Your hand-written LangGraph agent gets lifted onto the canvas, attacked by the simulation arena, repaired, and re-exported — with the guards it was missing.
+Supported importers: **LangGraph** (Python AST), **Flowise**, **n8n** (edges from the `connections` map), **Dify** (DSL JSON/YAML), and **OpenAI Agent Builder** / ReactFlow. Your hand-written agent gets attacked by the simulation arena, repaired, and re-exported — with the guards it was missing.
+
+## Drop it into CI — GitHub Action + score badge
+
+Add a behavior gate to any repo in two lines:
+
+```yaml
+# .github/workflows/agentproof.yml
+- uses: evanl666/agentproof@main
+  with:
+    spec: agent.spec.md      # or: pack: fintech
+    fail-under: '85'         # minimum Agent Score to pass
+    autofix: 'true'
+```
+
+The action runs the full arena, auto-repairs, enforces your score threshold, and writes a rich **job summary** to the PR. `agentproof init` scaffolds the spec and this workflow for you. Publish the verdict with a self-contained SVG badge:
+
+```bash
+agentproof badge ./agentproof-project -o badge.svg
+```
+
+[![agentproof](https://img.shields.io/badge/agentproof-96%2F100%20·%20shippable-3fb950)](https://github.com/evanl666/agentproof)
+
+## Team platform — dashboard + org policy library
+
+```bash
+agentproof serve       # multi-project dashboard at localhost:4600
+```
+
+Every project on one board with its live Agent Score and shippable verdict, an **org-wide policy library** ("PII may never leave the system", defined once and attached to any project), one-click auto-fix, and a REST API — still zero-dependency and file-backed, so the whole workspace is JSON you can commit or mount.
 
 ## Export real code, not a toy
 
@@ -183,17 +213,21 @@ agentproof/
 ├── coverage.py    # node/edge/approval-path coverage
 ├── diff.py        # behavior diff between graph versions
 ├── score.py       # reliability · safety · cost · coverage · autonomy
-├── importers.py   # LangGraph AST / Flowise JSON / generic JSON lifting
+├── importers.py   # LangGraph AST / Flowise / n8n / Dify / OpenAI Builder lifting
 ├── export/        # verified graph → LangGraph / OpenAI Agents / CrewAI / TypeScript
 ├── pricing.py     # per-model cost simulator (Fable/Opus/Sonnet/Haiku)
 ├── packs.py       # domain scenario packs (support / fintech / healthcare)
 ├── policy_lines.py# policy visualizer: contract lines drawn on the graph
 ├── team.py        # versioned snapshots + PR-style behavior review
+├── badge.py       # Agent Score SVG badge for READMEs
 ├── llm_sim.py     # optional LLM-in-the-loop simulation (real Claude planner)
 ├── report.py      # self-contained canvas-replay HTML
-├── studio.py      # local visual IDE (stdlib HTTP, zero deps)
-└── cli.py
+├── studio.py      # local single-project visual IDE (stdlib HTTP, zero deps)
+├── server.py      # multi-project team backend + org policy library
+└── cli.py         # gate / init / badge / serve / studio + the full pipeline
 ```
+
+Plus `action.yml` at the repo root — the reusable GitHub Action.
 
 Design principle: **enforcement is verified, not assumed.** Synthesis builds only the functional skeleton a prototyping tool would give you. Constraints compile into *tests*. Guards, gates and fallbacks enter the graph only after simulation proves they're missing — so every safety structure in your agent is there because a failing scenario demanded it, and a passing scenario now proves it works.
 
@@ -213,8 +247,12 @@ agentproof import agent.py -o proj/   # lift an existing agent
 agentproof report proj/ -o out.html   # canvas replay report
 agentproof commit proj/ -m "..."      # snapshot behavior (team mode)
 agentproof review proj/ 1 2 [--check] # PR-style behavior review
+agentproof gate --pack fintech --autofix --fail-under 85   # one-shot CI gate
+agentproof badge proj/ -o badge.svg   # Agent Score SVG badge
+agentproof init                       # scaffold spec + CI workflow into a repo
+agentproof serve                      # multi-project team dashboard
 agentproof packs                      # list domain scenario packs
-agentproof studio                     # local visual IDE
+agentproof studio                     # local single-project visual IDE
 ```
 
 ## Domain scenario packs
@@ -274,7 +312,7 @@ tests real end-to-end behavior, not just the model in isolation.
 
 ```bash
 python -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest tests/ -v        # 78 tests, ~1s
+.venv/bin/pytest tests/ -v        # 101 tests, ~2s
 ```
 
 ## Roadmap
@@ -285,8 +323,11 @@ python -m venv .venv && .venv/bin/pip install -e ".[dev]"
 - [x] Policy visualizer: red/green policy lines drawn on the canvas
 - [x] Cost simulator with per-model pricing tables
 - [x] Team mode: versioned specs, review behavior diffs like PRs
-- [ ] Hosted collaboration backend (shared projects, org-wide policy libraries)
-- [ ] More importers: OpenAI Agent Builder, n8n, Dify exports
+- [x] Hosted collaboration backend (multi-project dashboard, org policy library)
+- [x] More importers: n8n, Dify, OpenAI Agent Builder
+- [x] GitHub Action + Agent Score badge + `agentproof init`
+- [ ] Publish to PyPI and the GitHub Marketplace
+- [ ] Production log replay: turn real traffic into regression scenarios
 
 ## License
 

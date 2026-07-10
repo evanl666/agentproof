@@ -29,6 +29,21 @@ jobs:
           agentproof policy /tmp/fintech --check
           agentproof cost /tmp/fintech
           agentproof commit /tmp/fintech -m baseline --author ci
+          agentproof badge /tmp/fintech -o /tmp/badge.svg
           for t in langgraph openai crewai typescript; do
             agentproof export /tmp/fintech -t $t -o /tmp/export-$t
           done
+      - name: CI gate (dogfood the GitHub Action's body)
+        run: agentproof gate --pack healthcare --autofix --fail-under 85 --badge /tmp/health.svg
+
+  action:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dogfood the reusable Action
+        uses: ./
+        with:
+          pack: support
+          fail-under: '85'
+          autofix: 'true'
+          badge: agent-badge.svg
