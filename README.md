@@ -249,12 +249,11 @@ Each run prints a step-by-step trace showing every guard, gate, and tool the mes
 agentproof studio
 ```
 
-A local web workbench (**Python stdlib only — no npm, no build step, no cloud, no API keys**):
+A local web workbench (**Python stdlib only — no npm, no build step, no cloud**) that is now a *unified console* for the entire engine:
 
-- **Canvas replay** — every scenario replays on the graph; failing paths turn red, click a node for the root cause
-- **Simulation arena** — normal users, malicious users, boundary values, prompt injection payloads, PII exfiltration, tool timeouts, cost blowups
-- **One-click auto-fix** — the system repairs the graph, re-runs all scenarios, and shows the behavior diff
-- **Agent Score** — reliability · safety · cost · coverage · autonomy, rolled into a shippability verdict
+- **Build / import / simulate / auto-fix / run** — author or lift an agent, watch it get attacked and repaired on the canvas, and talk to it live.
+- **Analysis console** — one row of buttons runs the whole toolkit into a slide-out panel: 🔒 reachability **proofs**, 📊 risk **coverage 2.0**, 🧬 **mutation** testing, 💰 **cost** projection, 🎯 LLM **red-team**, 🤖 the autonomous **AI audit** (with the breaking conversation), and a 📋 **compliance** report.
+
 
 ## Import agents you already have
 
@@ -515,7 +514,7 @@ tests real end-to-end behavior, not just the model in isolation.
 
 ```bash
 python -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest tests/ -v        # 230 tests, ~5s
+.venv/bin/pytest tests/ -v        # 232 tests, ~5s
 ```
 
 ## Roadmap

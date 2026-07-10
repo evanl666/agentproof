@@ -77,3 +77,42 @@ def test_http_endpoints(studio_server):
 
     snapshot = post("/api/autofix", {})
     assert all(r["passed"] for r in snapshot["results"])
+
+
+def test_console_capabilities(tmp_path):
+    """The unified console: every analysis capability works on a fixed agent."""
+    state = StudioState(tmp_path)
+    state.build(DEFAULT_SPEC)
+    state.simulate()
+    state.apply_autofix()
+
+    proofs = state.prove()
+    assert proofs["all_hold"]
+
+    cov = state.risk_coverage()
+    assert 0 <= cov["overall"] <= 1
+
+    mut = state.mutate()
+    assert mut["total"] > 0 and 0 <= mut["score"] <= 1
+
+    cost = state.cost()
+    assert cost["projection"]["per_1k_requests_usd"] > 0
+    assert cost["comparison"]
+
+    rt = state.redteam(n=6)
+    assert rt["total"] > 0
+    assert rt["failed"] == 0  # fixed agent holds the red-team
+
+    audit = state.audit(turns=3)
+    assert "verdict" in audit
+    assert audit["breached"] == 0  # fixed agent is not breached
+
+    comp = state.compliance()
+    assert comp["score"]["shippable"]
+    assert comp["controls"] and comp["proofs"]
+
+
+def test_console_requires_build(tmp_path):
+    state = StudioState(tmp_path)
+    with pytest.raises(ValueError):
+        state.prove()

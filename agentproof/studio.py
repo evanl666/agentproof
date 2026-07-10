@@ -1,10 +1,12 @@
-"""AgentProof Studio: a local web IDE with zero dependencies.
+"""AgentProof Studio: the unified visual console, zero dependencies.
 
-`agentproof studio` starts a local server and opens a visual workbench:
-write a behavior spec (or import an existing agent), watch the graph render,
-run the simulation arena, click failing scenarios to replay them on the
-canvas, apply auto-fix, inspect the behavior diff, and export production
-code — all backed by the same engine the CLI uses.
+`agentproof studio` starts a local server and opens one workbench that drives
+every AgentProof capability: write a spec (or import an agent), render the
+graph, run the simulation arena, replay failing scenarios on the canvas,
+auto-fix, and run it live. The **analysis console** puts the whole engine behind
+one row of buttons — reachability proofs, risk coverage 2.0, mutation testing,
+cost projection, LLM red-team, the autonomous AI audit, and a compliance report
+— each rendered in a slide-out panel.
 
 Built on the Python standard library only: no npm, no build step, no cloud.
 """
@@ -175,6 +177,75 @@ class StudioState:
         runtime = AgentRuntime(self.graph, self.spec, planner=default_planner())
         return runtime.run(message, approved_by_human=approved).to_dict()
 
+    # -- unified console: every AgentProof capability, one endpoint each -----
+
+    def _require(self):
+        if not (self.spec and self.graph):
+            raise ValueError("Build or import an agent first")
+        if not self.scenarios:
+            self.scenarios = generate_scenarios(self.spec)
+
+    def prove(self) -> dict[str, Any]:
+        self._require()
+        from agentproof.proofs import proof_summary
+
+        return proof_summary(self.graph, self.spec)
+
+    def risk_coverage(self) -> dict[str, Any]:
+        self._require()
+        from agentproof.coverage2 import compute_risk_coverage
+
+        results = self.results or run_suite(self.graph, self.spec, self.scenarios)
+        return compute_risk_coverage(self.graph, results).to_dict()
+
+    def mutate(self) -> dict[str, Any]:
+        self._require()
+        from agentproof.mutation import mutation_test
+
+        return mutation_test(self.graph, self.spec, self.scenarios).to_dict()
+
+    def cost(self, model: str = "claude-sonnet-5") -> dict[str, Any]:
+        self._require()
+        from agentproof.pricing import compare_models, project_cost
+
+        results = self.results or run_suite(self.graph, self.spec, self.scenarios)
+        return {"projection": project_cost(results, model_id=model).to_dict(),
+                "comparison": compare_models(results)}
+
+    def redteam(self, n: int = 12, model: str | None = None) -> dict[str, Any]:
+        self._require()
+        from agentproof.redteam import ClaudeRedTeam, redteam_scenarios
+
+        scen = redteam_scenarios(self.spec, n=n, model=model)
+        results = run_suite(self.graph, self.spec, scen)
+        return {
+            "using_model": bool(model or ClaudeRedTeam.available()),
+            "total": len(results),
+            "failed": sum(1 for r in results if not r.passed),
+            "scenarios": [{"message": s.user_message, "category": s.category.value,
+                           "passed": r.passed, "violations": [v.kind for v in r.violations]}
+                          for s, r in zip(scen, results)],
+        }
+
+    def audit(self, turns: int = 5, model: str | None = None) -> dict[str, Any]:
+        self._require()
+        from agentproof.attack import runtime_agent
+        from agentproof.audit import audit_agent
+        from agentproof.runtime import AgentRuntime, default_planner
+
+        agent = runtime_agent(AgentRuntime(self.graph, self.spec, planner=default_planner()))
+        return audit_agent(agent, self.spec, max_turns=turns, model=model,
+                           agent_name=self.spec.name).to_dict()
+
+    def compliance(self) -> dict[str, Any]:
+        self._require()
+        from agentproof.compliance import compliance_data
+
+        return compliance_data(self.spec, self.graph, self.scenarios)
+
+    def cost_default(self) -> dict[str, Any]:
+        return self.cost()
+
 
 def _studio_html() -> str:
     return f"""<!DOCTYPE html>
@@ -191,20 +262,50 @@ textarea {{ width: 100%; height: 46%; background: #0d1117; color: var(--text);
 .scorebar {{ display: flex; gap: 10px; padding: 10px 12px; flex-wrap: wrap; }}
 #toast {{ position: fixed; bottom: 16px; right: 16px; background: #1f6feb; padding: 10px 16px;
   border-radius: 8px; display: none; }}
+.console-bar {{ display: flex; gap: 6px; align-items: center; padding: 8px 16px;
+  border-bottom: 1px solid var(--border); background: #0d1117; flex-wrap: wrap; }}
+.console-label {{ font-size: 12px; color: var(--muted); margin-right: 4px; }}
+.cbtn {{ background: #161b22; color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 5px 11px; font-size: 12px; cursor: pointer; }}
+.cbtn:hover {{ border-color: var(--purple); }}
+#console {{ position: fixed; right: 0; top: 0; bottom: 0; width: 460px; max-width: 92vw;
+  background: var(--panel); border-left: 1px solid var(--border); transform: translateX(100%);
+  transition: transform .2s; overflow-y: auto; z-index: 50; box-shadow: -8px 0 24px rgba(0,0,0,.4); }}
+#console.open {{ transform: translateX(0); }}
+#console .chead {{ display: flex; align-items: center; gap: 8px; padding: 12px 16px;
+  border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--panel); }}
+#console .cbody {{ padding: 14px 16px; }}
+#console h3 {{ font-size: 14px; margin: 12px 0 6px; }}
+#console .close {{ margin-left: auto; cursor: pointer; color: var(--muted); font-size: 18px; }}
+.meter {{ height: 8px; background: var(--border); border-radius: 4px; margin: 4px 0 10px; overflow: hidden; }}
+.meter > div {{ height: 100%; }}
+.kv {{ display: flex; justify-content: space-between; font-size: 13px; padding: 3px 0; border-bottom: 1px solid #21262d; }}
+.turn {{ font-size: 12px; margin: 4px 0; padding: 6px 8px; border-radius: 6px; background: #0d1117; }}
+.spin {{ color: var(--muted); padding: 20px; }}
 </style></head>
 <body>
-<header>
+<header style="flex-wrap:wrap">
   <h1>⚡ AgentProof Studio</h1>
   <span class="chip" id="verdict"><b>—</b></span>
   <div class="toolbar">
     <button id="btn-build" class="primary">Build from spec</button>
     <button id="btn-import">Import agent…</button>
-    <button id="btn-simulate">▶ Run simulation</button>
+    <button id="btn-simulate">▶ Simulate</button>
     <button id="btn-autofix">🛠 Auto-fix</button>
     <button id="btn-policy">Policy lines</button>
     <button id="btn-export">Export code</button>
   </div>
 </header>
+<div class="console-bar">
+  <span class="console-label">Analysis console:</span>
+  <button class="cbtn" data-act="prove">🔒 Prove</button>
+  <button class="cbtn" data-act="coverage">📊 Coverage 2.0</button>
+  <button class="cbtn" data-act="mutate">🧬 Mutation</button>
+  <button class="cbtn" data-act="cost">💰 Cost</button>
+  <button class="cbtn" data-act="redteam">🎯 Red-team</button>
+  <button class="cbtn" data-act="audit">🤖 AI Audit</button>
+  <button class="cbtn" data-act="compliance">📋 Compliance</button>
+</div>
 <div class="layout">
   <div class="panel" style="display:flex;flex-direction:column">
     <h2>Behavior spec</h2>
@@ -231,6 +332,8 @@ textarea {{ width: 100%; height: 46%; background: #0d1117; color: var(--text);
   </div>
 </div>
 <input type="file" id="file" style="display:none" accept=".py,.json">
+<div id="console"><div class="chead"><b id="ctitle">Console</b><span class="close" id="cclose">✕</span></div>
+  <div class="cbody" id="cbody"></div></div>
 <div id="toast"></div>
 <script>{CANVAS_JS}</script>
 <script>
@@ -378,6 +481,60 @@ $('file').addEventListener('change', async e => {{
   STATE.diff = null; render(); toast('Imported ' + file.name + ' — run the simulation to prove it');
 }});
 
+// ---- unified analysis console ----
+const CONSOLE = $('console');
+function openConsole(title, html) {{
+  $('ctitle').textContent = title; $('cbody').innerHTML = html; CONSOLE.classList.add('open');
+}}
+$('cclose').addEventListener('click', () => CONSOLE.classList.remove('open'));
+
+function meter(pct, color) {{
+  return `<div class="meter"><div style="width:${{Math.round(pct*100)}}%;background:${{color||'var(--blue)'}}"></div></div>`;
+}}
+function pill(ok, txt) {{ return `<span class="chip ${{ok?'good':'bad'}}"><b>${{txt}}</b></span>`; }}
+
+const RENDER = {{
+  prove: (d) => '<h3>Reachability proofs</h3>' + (d.all_hold ? pill(true, 'all '+d.total+' proven') : pill(false, d.failing+' VIOLATED')) +
+    d.proofs.map(p => `<div class="${{p.holds?'note':'violation'}}">${{p.holds?'✓ PROVEN':'✗ VIOLATED'}} ${{p.property}}` +
+      (p.holds?'':`<br><small>counterexample: ${{p.counterexample.join(' → ')}}</small>`) + '</div>').join(''),
+  coverage: (d) => '<h3>Risk coverage 2.0</h3>' +
+    [['high-risk tools attacked', d.high_risk_tool_coverage, 'var(--red)'],
+     ['sensitive→external flows', d.data_flow_coverage, 'var(--amber)'],
+     ['approval paths exercised', d.approval_path_coverage, 'var(--green)'],
+     ['fallback paths exercised', d.fallback_coverage, 'var(--blue)']].map(([l,v,c]) =>
+      `<div class="kv"><span>${{l}}</span><b>${{Math.round(v*100)}}%</b></div>${{meter(v,c)}}`).join('') +
+    (d.uncovered_high_risk_tools.length ? `<div class="violation">Never attacked: ${{d.uncovered_high_risk_tools.join(', ')}}</div>` : ''),
+  mutate: (d) => `<h3>Mutation testing</h3>${{pill(d.score>=0.7, Math.round(d.score*100)+'% kill rate')}} ${{d.killed}}/${{d.total}} killed` +
+    d.mutants.map(m => `<div class="kv"><span>${{m.killed?'💀':'🧟'}} ${{m.description}}</span><b>${{m.killed?'killed':'survived'}}</b></div>`).join(''),
+  cost: (d) => `<h3>Cost projection</h3><div class="kv"><span>per 1,000 requests</span><b>$${{d.projection.per_1k_requests_usd}}</b></div>` +
+    '<h3>Model comparison</h3>' + d.comparison.map(r =>
+      `<div class="kv"><span>${{r.display_name}}</span><b>$${{r.per_1k_requests_usd}}/1k</b></div>`).join(''),
+  redteam: (d) => `<h3>Red-team ${{d.using_model?'(LLM-invented)':'(offline)'}}</h3>${{pill(d.failed===0, d.total-d.failed+'/'+d.total+' held')}}` +
+    d.scenarios.map(s => `<div class="${{s.passed?'note':'violation'}}">${{s.passed?'✓':'✗'}} [${{s.category}}] ${{s.message.slice(0,80)}}</div>`).join(''),
+  audit: (d) => `<h3>🔒 ${{d.verdict}}</h3><div class="note">${{d.summary}}</div>` +
+    d.findings.sort((a,b)=>b.succeeded-a.succeeded).map(f => {{
+      let h = `<div class="${{f.succeeded?'violation':'note'}}">${{f.succeeded?'🔴 BREACHED':'🟢 held'}} [${{f.severity}}] ${{f.goal}}`;
+      if (f.succeeded) {{ h += `<br><small>fix: ${{f.suggested_fix}}</small>` +
+        f.transcript.turns.map(t => `<div class="turn">🗣 ${{t.attacker.slice(0,90)}}<br>🤖 ${{t.agent.slice(0,90)}}</div>`).join(''); }}
+      return h + '</div>';
+    }}).join(''),
+  compliance: (d) => `<h3>Compliance — ${{d.name}}</h3>${{pill(d.score.shippable, d.score.overall+'/100')}}` +
+    `<div class="kv"><span>Safety proofs</span><b>${{d.proofs.filter(p=>p.holds).length}}/${{d.proofs.length}}</b></div>` +
+    '<h3>Controls</h3>' + d.controls.map(c => `<div class="kv"><span>${{c.description}}</span><b>${{c.kind}}</b></div>`).join('') +
+    (d.gaps.open_proofs.length || d.gaps.uncovered_high_risk_tools.length ?
+      '<h3>Gaps</h3>' + [...d.gaps.open_proofs, ...d.gaps.uncovered_high_risk_tools.map(t=>'untested: '+t)].map(g=>`<div class="violation">${{g}}</div>`).join('')
+      : '<div class="note">No gaps — all controls tested and proven.</div>'),
+}};
+const TITLES = {{prove:'🔒 Reachability proofs', coverage:'📊 Risk coverage', mutate:'🧬 Mutation testing',
+  cost:'💰 Cost', redteam:'🎯 Red-team', audit:'🤖 Autonomous audit', compliance:'📋 Compliance'}};
+document.querySelectorAll('.cbtn').forEach(btn => btn.addEventListener('click', async () => {{
+  const act = btn.dataset.act;
+  if (!STATE || !STATE.graph) return toast('Build an agent first');
+  openConsole(TITLES[act], '<div class="spin">running ' + act + '…' + (act==='audit'||act==='redteam'?' (may call the model)':'') + '</div>');
+  try {{ const d = await api('/api/' + act, {{}}); openConsole(TITLES[act], RENDER[act](d)); }}
+  catch (e) {{ openConsole(TITLES[act], '<div class="violation">'+e.message+'</div>'); }}
+}}));
+
 api('/api/state').then(s => {{ STATE = s; render(); }});
 </script>
 </body></html>"""
@@ -431,6 +588,20 @@ def make_handler(state: StudioState):
                     self._send(200, state.export())
                 elif self.path == "/api/run":
                     self._send(200, state.run_message(body["message"], body.get("approved", False)))
+                elif self.path == "/api/prove":
+                    self._send(200, state.prove())
+                elif self.path == "/api/coverage":
+                    self._send(200, state.risk_coverage())
+                elif self.path == "/api/mutate":
+                    self._send(200, state.mutate())
+                elif self.path == "/api/cost":
+                    self._send(200, state.cost(body.get("model", "claude-sonnet-5")))
+                elif self.path == "/api/redteam":
+                    self._send(200, state.redteam(body.get("n", 12), body.get("model")))
+                elif self.path == "/api/audit":
+                    self._send(200, state.audit(body.get("turns", 5), body.get("model")))
+                elif self.path == "/api/compliance":
+                    self._send(200, state.compliance())
                 else:
                     self._send(404, {"error": "not found"})
             except (ValueError, KeyError, json.JSONDecodeError) as exc:
