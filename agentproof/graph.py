@@ -198,4 +198,13 @@ class AgentGraph:
         )
 
     def copy(self) -> "AgentGraph":
-        return AgentGraph.from_dict(self.to_dict())
+        # A true deep copy — to_dict/from_dict alone would share the nested
+        # `config` dicts by reference, so mutating a copied node's config would
+        # corrupt the original (this bit autofix and mutation testing).
+        import copy as _copy
+
+        return AgentGraph(
+            name=self.name,
+            nodes=[Node(n.id, n.type, n.label, _copy.deepcopy(n.config)) for n in self.nodes],
+            edges=[Edge(e.source, e.target, e.label) for e in self.edges],
+        )

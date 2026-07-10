@@ -412,6 +412,17 @@ class _Run:
             if amount <= threshold:
                 self._walk_to(refund_tool.id)
                 self.notes.append(f"auto-refund ${amount:.2f} (within ${threshold:.2f} limit)")
+                # The spec is the oracle: a gate configured above the declared
+                # policy limit that auto-approves over-limit money is a violation
+                # (catches a silently-weakened limit).
+                limit_c = spec.constraint(ConstraintKind.SPEND_LIMIT)
+                spec_limit = float(limit_c.params.get("threshold")) if limit_c and limit_c.params.get("threshold") is not None else None
+                if spec_limit is not None and amount > spec_limit:
+                    self.violations.append(Violation(
+                        kind="policy_violation",
+                        message=(f"Auto-refunded ${amount:.2f}; the gate allows it but the "
+                                 f"policy limit is ${spec_limit:.2f}"),
+                        node_id=refund_tool.id))
             else:
                 approval = next(
                     (

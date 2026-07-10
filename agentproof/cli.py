@@ -665,6 +665,113 @@ def cmd_movie(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_mutate(args: argparse.Namespace) -> int:
+    from agentproof.mutation import mutation_test
+
+    project = Path(args.project)
+    spec, graph, scenarios = _load_spec(project), _load_graph(project), _load_scenarios(project)
+    report = mutation_test(graph, spec, scenarios)
+    print(f"{_c(BOLD, 'Mutation testing')} · {report.to_dict()['killed']}/{report.to_dict()['total']} mutants killed")
+    print(f"  mutation score: {_c(GREEN if report.score >= 0.9 else YELLOW, f'{report.score*100:.0f}%')}")
+    for m in report.survivors:
+        print(f"  {_c(RED, '✗ survived')} {m.description} — a regression your tests wouldn't catch")
+    return 1 if report.survivors and args.check else 0
+
+
+def cmd_coverage2(args: argparse.Namespace) -> int:
+    from agentproof.coverage2 import compute_risk_coverage
+
+    project = Path(args.project)
+    spec, graph, scenarios = _load_spec(project), _load_graph(project), _load_scenarios(project)
+    rc = compute_risk_coverage(graph, run_suite(graph, spec, scenarios))
+    print(_c(BOLD, "Risk coverage 2.0:"))
+    print(f"  high-risk tools attacked : {round(rc.high_risk_tool_coverage*100)}%")
+    print(f"  sensitive→external flows : {round(rc.data_flow_coverage*100)}%")
+    print(f"  approval paths exercised : {round(rc.approval_path_coverage*100)}%")
+    print(f"  fallback paths exercised : {round(rc.fallback_coverage*100)}%")
+    for t in rc.uncovered_high_risk_tools:
+        print(f"  {_c(RED, '✗')} high-risk tool never attacked: {t}")
+    return 0
+
+
+def cmd_compliance(args: argparse.Namespace) -> int:
+    from agentproof.compliance import write_compliance
+
+    project = Path(args.project)
+    spec, graph, scenarios = _load_spec(project), _load_graph(project), _load_scenarios(project)
+    path = write_compliance(args.out, spec, graph, scenarios, fmt=args.format)
+    print(f"Compliance report written to {_c(CYAN, str(path))}")
+    return 0
+
+
+def cmd_incident(args: argparse.Namespace) -> int:
+    from agentproof.incident import incidents_to_regressions, regression_pr_body
+
+    project = Path(args.project)
+    spec = _load_spec(project)
+    incidents = incidents_to_regressions(args.incidents, spec)
+    if not incidents:
+        print(_c(YELLOW, "No incident inputs found."))
+        return 0
+    print(f"{_c(BOLD, f'{len(incidents)} incident(s) → regression scenarios')}")
+    for inc in incidents:
+        print(f"  [{inc.suspected_kind}] {inc.title[:50]}: {inc.message[:50]}")
+    if args.save:
+        existing = _load_scenarios(project)
+        _save(project, scenarios=[s.to_dict() for s in existing + [i.scenario for i in incidents]])
+        print(f"\n  {_c(GREEN, 'Saved')} into the project's suite")
+    if args.pr_body:
+        Path(args.pr_body).write_text(regression_pr_body(incidents, project=str(project)))
+        print(f"  PR body: {_c(CYAN, args.pr_body)}")
+    return 0
+
+
+def cmd_review_pr(args: argparse.Namespace) -> int:
+    from agentproof.prbot import build_review_comment, verdict_blocks
+
+    project = Path(args.project)
+    spec = _load_spec(project)
+    before = _load_graph(project, "baseline_graph")
+    after = _load_graph(project)
+    scenarios = _load_scenarios(project)
+    comment = build_review_comment(spec, before, after, scenarios)
+    if args.out:
+        Path(args.out).write_text(comment)
+    print(comment)
+    return 1 if verdict_blocks(comment) and args.check else 0
+
+
+def cmd_packs_publish(args: argparse.Namespace) -> int:
+    from agentproof.marketplace import publish_pack
+
+    spec_text = Path(args.spec).read_text()
+    entry = publish_pack(args.name, spec_text, description=args.description or "",
+                         domain=args.domain, version=args.version)
+    print(f"Published {_c(BOLD, entry.name + '@' + entry.version)} to the registry")
+    return 0
+
+
+def cmd_packs_install(args: argparse.Namespace) -> int:
+    from agentproof.marketplace import install_pack
+
+    path = install_pack(args.name, args.out, version=args.version)
+    print(f"Installed {_c(BOLD, args.name)} → {_c(CYAN, str(path))}")
+    return 0
+
+
+def cmd_packs_search(args: argparse.Namespace) -> int:
+    from agentproof.marketplace import search_packs
+
+    entries = search_packs(args.query or "")
+    if not entries:
+        print(_c(DIM, "No published packs yet. Use `agentproof packs-publish`."))
+        return 0
+    print(_c(BOLD, "Registry packs:"))
+    for e in entries:
+        print(f"  {_c(CYAN, e.name + '@' + e.version):<28} [{e.domain}] {e.description}")
+    return 0
+
+
 def cmd_studio(args: argparse.Namespace) -> int:
     serve(args.dir, port=args.port, open_browser=not args.no_browser)
     return 0
@@ -904,6 +1011,52 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--approve", action="store_true", help="simulate a human approving the action")
     p.add_argument("--check", action="store_true", help="exit 1 if the run was blocked")
     p.set_defaults(fn=cmd_run)
+
+    p = sub.add_parser("mutate", help="mutation testing — does your suite kill injected regressions?")
+    p.add_argument("project")
+    p.add_argument("--check", action="store_true", help="exit 1 if any mutant survives")
+    p.set_defaults(fn=cmd_mutate)
+
+    p = sub.add_parser("coverage", help="risk coverage 2.0 (high-risk tools / data-flows / approvals)")
+    p.add_argument("project")
+    p.set_defaults(fn=cmd_coverage2)
+
+    p = sub.add_parser("compliance", help="generate a compliance report (controls/tests/proofs/gaps)")
+    p.add_argument("project")
+    p.add_argument("-o", "--out", default="compliance.md")
+    p.add_argument("--format", choices=["md", "html"], default="md")
+    p.set_defaults(fn=cmd_compliance)
+
+    p = sub.add_parser("incident", help="turn production incidents into regression scenarios")
+    p.add_argument("incidents", help="incident/Sentry JSON export")
+    p.add_argument("project")
+    p.add_argument("--save", action="store_true", help="add the regressions to the project")
+    p.add_argument("--pr-body", help="write a PR body describing the fix")
+    p.set_defaults(fn=cmd_incident)
+
+    p = sub.add_parser("review-pr", help="render a PR behavior-review comment (Codecov for agents)")
+    p.add_argument("project")
+    p.add_argument("-o", "--out", help="write the Markdown comment to a file")
+    p.add_argument("--check", action="store_true", help="exit 1 on a changes-requested verdict")
+    p.set_defaults(fn=cmd_review_pr)
+
+    p = sub.add_parser("packs-publish", help="publish a spec as a reusable pack to the registry")
+    p.add_argument("spec")
+    p.add_argument("--name", required=True)
+    p.add_argument("--description", default="")
+    p.add_argument("--domain", default="general")
+    p.add_argument("--version", default="1.0.0")
+    p.set_defaults(fn=cmd_packs_publish)
+
+    p = sub.add_parser("packs-install", help="install a registry pack into a project")
+    p.add_argument("name")
+    p.add_argument("-o", "--out", default="./agentproof-project")
+    p.add_argument("--version")
+    p.set_defaults(fn=cmd_packs_install)
+
+    p = sub.add_parser("packs-search", help="search the pack registry")
+    p.add_argument("query", nargs="?")
+    p.set_defaults(fn=cmd_packs_search)
 
     p = sub.add_parser("studio", help="launch the local visual IDE")
     p.add_argument("--dir", default=".")

@@ -370,6 +370,15 @@ agentproof/
 ├── risk.py        # generic risk taxonomy — any domain, not just refund/money
 ├── smart.py       # LLM spec parsing + response judging
 ├── intelligence.py# LLM-native brain: graph synthesis + scenario gen, LLM-by-default
+├── coverage2.py   # risk coverage (high-risk tools / data-flows / approvals)
+├── mutation.py    # mutation testing — does the suite kill injected regressions?
+├── prioritize.py  # risk-based scenario ordering (test the dangerous first)
+├── incident.py    # production incident → permanent regression test
+├── marketplace.py # policy-pack registry (publish / install / search)
+├── transaction.py # real tool transaction contracts (preview/commit/undo/approval)
+├── delegation.py  # multi-agent delegation coverage (scope propagation)
+├── prbot.py       # PR behavior-review comment (Codecov for agents)
+├── compliance.py  # spec-to-compliance report (controls/tests/proofs/gaps)
 ├── proofs.py      # static reachability proofs (structural safety invariants)
 ├── replay.py      # production trace replay → regression scenarios
 ├── redteam.py     # model-driven adversarial generation (Haiku) + offline fallback
@@ -486,7 +495,7 @@ tests real end-to-end behavior, not just the model in isolation.
 
 ```bash
 python -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest tests/ -v        # 204 tests, ~5s
+.venv/bin/pytest tests/ -v        # 221 tests, ~5s
 ```
 
 ## Roadmap
@@ -516,7 +525,10 @@ python -m venv .venv && .venv/bin/pip install -e ".[dev]"
 - [x] LLM intelligence layer — smart spec parsing (any phrasing), pluggable with rule-based fallback
 - [ ] Publish to PyPI and the GitHub Marketplace
 - [x] LLM-native by default — spec parsing, graph synthesis, scenario generation, response judging (deterministic fallback offline)
-- [ ] More P1/P2: mutation testing, coverage 2.0, PR bot, compliance report
+- [x] Mutation testing, coverage 2.0, risk-based prioritization
+- [x] Production incident → regression, pack marketplace, transaction contracts
+- [x] Multi-agent delegation coverage, PR behavior-review bot, compliance report
+- [ ] Publish to PyPI and the GitHub Marketplace (needs release credentials)
 
 ## License
 

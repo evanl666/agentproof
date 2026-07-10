@@ -6,7 +6,7 @@ Pipeline: Prompt -> Behavior Spec -> Tests -> Agent Graph -> Simulation
           -> Auto-fix -> Code Export -> CI
 """
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 
 from agentproof.spec import BehaviorSpec, Constraint, ConstraintKind, parse_spec
 from agentproof.graph import AgentGraph, Edge, Node, NodeType
@@ -58,6 +58,15 @@ from agentproof.intelligence import (
     smart_synthesize,
     use_llm,
 )
+from agentproof.coverage2 import RiskCoverageReport, compute_risk_coverage
+from agentproof.mutation import MutationReport, mutation_test
+from agentproof.prioritize import prioritize, risk_weight, top_scenarios
+from agentproof.incident import incidents_to_regressions, regression_pr_body
+from agentproof.marketplace import install_pack, list_registry, publish_pack, search_packs
+from agentproof.transaction import check_transaction_contracts
+from agentproof.delegation import SubAgent, check_delegation
+from agentproof.prbot import build_review_comment
+from agentproof.compliance import compliance_data, write_compliance
 
 __all__ = [
     "BehaviorSpec",
@@ -152,4 +161,23 @@ __all__ = [
     "SmartSynthesizer",
     "SmartScenarioGen",
     "use_llm",
+    "compute_risk_coverage",
+    "RiskCoverageReport",
+    "mutation_test",
+    "MutationReport",
+    "prioritize",
+    "top_scenarios",
+    "risk_weight",
+    "incidents_to_regressions",
+    "regression_pr_body",
+    "publish_pack",
+    "install_pack",
+    "search_packs",
+    "list_registry",
+    "check_transaction_contracts",
+    "check_delegation",
+    "SubAgent",
+    "build_review_comment",
+    "compliance_data",
+    "write_compliance",
 ]
