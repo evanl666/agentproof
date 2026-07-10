@@ -85,7 +85,15 @@ def _render_policy(spec: BehaviorSpec) -> str:
     return "\n".join(lines)
 
 
-def _render_tools(graph: AgentGraph) -> str:
+def _render_tools(graph: AgentGraph, spec=None, model: str | None = None) -> str:
+    """Render tools.py with fleshed-out per-tool scaffolds (typed reads, example
+    returns, concrete TODOs). LLM-written when a key + spec are supplied."""
+    from agentproof.toolgen import render_tools_module
+
+    return render_tools_module(graph, spec=spec, model=model)
+
+
+def _render_tools_legacy(graph: AgentGraph) -> str:
     lines = [
         '"""Tool implementations. Wire these to your real systems."""',
         "",

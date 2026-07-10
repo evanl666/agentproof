@@ -164,7 +164,7 @@ def export_framework(
     files = {
         "agent/__init__.py": "",
         "agent/agent.py": assembly,
-        "agent/tools.py": _render_tools(graph),
+        "agent/tools.py": _render_tools(graph, spec=spec, model=model),
         "agent/policy.py": _render_policy(spec),
         "agent/prompts.py": _render_prompts(spec),
         "tests/__init__.py": "",

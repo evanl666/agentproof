@@ -369,15 +369,7 @@ class StudioState:
             i += 1
         return tid
 
-    def add_tool(self, label: str, risk: dict[str, Any] | None = None) -> dict[str, Any]:
-        if not self.graph:
-            raise ValueError("Build or import an agent first")
-        label = (label or "").strip()
-        if not label:
-            raise ValueError("Tool needs a name")
-        planner = self._planner_id()
-        if not planner:
-            raise ValueError("This graph has no planner to attach a tool to")
+    def _attach_tool(self, label: str, risk: dict[str, Any] | None, planner: str) -> str:
         tid = self._slug_tool(label, {n.id for n in self.graph.nodes})
         config: dict[str, Any] = {}
         for flag, key in self._RISK_KEYS.items():
@@ -387,11 +379,44 @@ class StudioState:
         # Wire into the agent loop: planner -> tool -> planner.
         self.graph.add_edge(planner, tid, label="tool call")
         self.graph.add_edge(tid, planner, label="result")
+        return tid
+
+    def add_tool(self, label: str, risk: dict[str, Any] | None = None) -> dict[str, Any]:
+        if not self.graph:
+            raise ValueError("Build or import an agent first")
+        label = (label or "").strip()
+        if not label:
+            raise ValueError("Tool needs a name")
+        planner = self._planner_id()
+        if not planner:
+            raise ValueError("This graph has no planner to attach a tool to")
+        tid = self._attach_tool(label, risk, planner)
         self.results = []
         self.fixes = []
         self.save()
         snap = self.snapshot()
         snap["added_tool"] = tid
+        return snap
+
+    def add_tools(self, tools: list[dict[str, Any]]) -> dict[str, Any]:
+        """Attach several tools at once (e.g. a whole MCP server's toolset)."""
+        if not self.graph:
+            raise ValueError("Build or import an agent first")
+        planner = self._planner_id()
+        if not planner:
+            raise ValueError("This graph has no planner to attach a tool to")
+        added = []
+        for t in tools or []:
+            label = (t.get("label") or "").strip()
+            if label:
+                added.append(self._attach_tool(label, t.get("risk"), planner))
+        if not added:
+            raise ValueError("No tools to add")
+        self.results = []
+        self.fixes = []
+        self.save()
+        snap = self.snapshot()
+        snap["added_tools"] = added
         return snap
 
     def remove_tool(self, tool_id: str) -> dict[str, Any]:
@@ -547,11 +572,22 @@ def _studio_html() -> str:
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>AgentProof Studio</title>
 <style>{CANVAS_CSS}
-.toolbar {{ display: flex; gap: 8px; margin-left: auto; }}
-button {{ background: #21262d; color: var(--text); border: 1px solid var(--border);
-  border-radius: 6px; padding: 6px 14px; font-size: 13px; cursor: pointer; }}
-button:hover {{ border-color: var(--blue); }}
-button.primary {{ background: #238636; border-color: #2ea043; }}
+/* Softer, modern slate palette — less harsh than pure GitHub-dark. */
+:root {{
+  --bg: #14161d; --panel: #1b1e27; --border: #2b303c; --text: #eceef3;
+  --muted: #9aa3b2; --blue: #6aa3ff; --purple: #b18cff;
+}}
+body {{ background: radial-gradient(1200px 600px at 20% -10%, #1b2130 0%, var(--bg) 55%) fixed; }}
+.panel {{ border-radius: 12px; }}
+.panel h2 {{ background: transparent; border-bottom: 1px solid var(--border); }}
+header {{ background: rgba(20,22,29,.7); backdrop-filter: blur(6px); }}
+.scenario:hover, .scenario.active {{ background: #232937; }}
+.toolbar {{ display: flex; gap: 8px; margin-left: auto; align-items: center; flex-wrap: wrap; }}
+button {{ background: #232733; color: var(--text); border: 1px solid var(--border);
+  border-radius: 8px; padding: 6px 13px; font-size: 13px; cursor: pointer; transition: border-color .15s, background .15s; }}
+button:hover {{ border-color: var(--blue); background: #2a2f3d; }}
+button.primary {{ background: #2f6feb; border-color: #4989f2; color: #fff; }}
+button.primary:hover {{ background: #3b78f0; }}
 textarea {{ width: 100%; height: 46%; background: #0d1117; color: var(--text);
   border: none; border-bottom: 1px solid var(--border); padding: 12px;
   font: 12px/1.6 ui-monospace, monospace; resize: none; outline: none; }}
@@ -564,6 +600,8 @@ textarea {{ width: 100%; height: 46%; background: #0d1117; color: var(--text);
 .cbtn {{ background: #161b22; color: var(--text); border: 1px solid var(--border);
   border-radius: 6px; padding: 5px 11px; font-size: 12px; cursor: pointer; }}
 .cbtn:hover {{ border-color: var(--purple); }}
+.analyze-menu {{ display: none; gap: 6px; }}
+.analyze-menu.open {{ display: inline-flex; flex-wrap: wrap; }}
 #console {{ position: fixed; right: 0; top: 0; bottom: 0; width: 460px; max-width: 92vw;
   background: var(--panel); border-left: 1px solid var(--border); transform: translateX(100%);
   transition: transform .2s; overflow-y: auto; z-index: 50; box-shadow: -8px 0 24px rgba(0,0,0,.4); }}
@@ -609,6 +647,32 @@ textarea {{ width: 100%; height: 46%; background: #0d1117; color: var(--text);
 .risk-chip.on-high_risk {{ background: rgba(248,81,73,.16); color: #f85149; border-color: #f85149; }}
 .risk-chip.on-external {{ background: rgba(88,166,255,.16); color: #58a6ff; border-color: #58a6ff; }}
 .risk-chip.on-pii {{ background: rgba(163,113,247,.18); color: #a371f7; border-color: #a371f7; }}
+.overlay {{ position: fixed; inset: 0; background: rgba(6,8,13,.75); z-index: 90; display: none;
+  align-items: center; justify-content: center; }}
+.overlay.open {{ display: flex; }}
+.modal {{ background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+  width: 560px; max-width: 94vw; max-height: 86vh; overflow: hidden; display: flex; flex-direction: column;
+  box-shadow: 0 24px 60px rgba(0,0,0,.5); }}
+.modal .mhead {{ padding: 16px 18px 0; border-bottom: 1px solid var(--border); }}
+.modal .mclose {{ float: right; cursor: pointer; color: var(--muted); font-size: 18px; }}
+.modal .tabs {{ display: flex; gap: 4px; margin-top: 12px; }}
+.modal .tab {{ border: none; border-bottom: 2px solid transparent; border-radius: 0; background: none;
+  color: var(--muted); padding: 8px 12px; }}
+.modal .tab.active {{ color: var(--text); border-bottom-color: var(--blue); }}
+.modal .mbody {{ padding: 16px 18px; overflow-y: auto; }}
+.modal input[type=text], .modal #ct-name {{ width: 100%; background: #0f1219; color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px; padding: 9px 11px; font-size: 13px; }}
+.risk-toggles {{ display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; font-size: 13px; }}
+.risk-toggles label {{ display: flex; align-items: center; gap: 6px; cursor: pointer; }}
+.mcp-server {{ border: 1px solid var(--border); border-radius: 10px; margin: 8px 0; overflow: hidden; }}
+.mcp-server > .sh {{ display: flex; align-items: center; gap: 8px; padding: 10px 12px; cursor: pointer; }}
+.mcp-server > .sh:hover {{ background: #232937; }}
+.mcp-server .sname {{ font-weight: 600; }}
+.mcp-server .sdesc {{ font-size: 12px; color: var(--muted); }}
+.mcp-tools {{ display: none; padding: 4px 12px 10px; }}
+.mcp-tools.open {{ display: block; }}
+.mcp-tools label {{ display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 13px; cursor: pointer; }}
+.mcp-tools .rf {{ font-size: 10px; color: var(--muted); margin-left: auto; }}
 .projbar {{ display: flex; gap: 6px; align-items: center; }}
 .projbar select {{ background: #0d1117; color: var(--text); border: 1px solid var(--border);
   border-radius: 6px; padding: 6px 10px; font-size: 13px; max-width: 220px; }}
@@ -682,14 +746,16 @@ textarea {{ width: 100%; height: 46%; background: #0d1117; color: var(--text);
 </header>
 <div class="console-bar">
   <button id="btn-fullaudit" class="cbtn" style="background:#8957e5;border-color:#a371f7;color:#fff;font-weight:600">⚡ Full audit</button>
-  <span class="console-label">or run one:</span>
-  <button class="cbtn" data-act="prove">🔒 Prove</button>
-  <button class="cbtn" data-act="coverage">📊 Coverage 2.0</button>
-  <button class="cbtn" data-act="mutate">🧬 Mutation</button>
-  <button class="cbtn" data-act="cost">💰 Cost</button>
-  <button class="cbtn" data-act="redteam">🎯 Red-team</button>
-  <button class="cbtn" data-act="audit">🤖 AI Audit</button>
-  <button class="cbtn" data-act="compliance">📋 Compliance</button>
+  <button id="analyze-toggle" class="cbtn">🔬 Analyze ▾</button>
+  <span id="analyze-menu" class="analyze-menu">
+    <button class="cbtn" data-act="prove">🔒 Prove</button>
+    <button class="cbtn" data-act="coverage">📊 Coverage</button>
+    <button class="cbtn" data-act="mutate">🧬 Mutation</button>
+    <button class="cbtn" data-act="cost">💰 Cost</button>
+    <button class="cbtn" data-act="redteam">🎯 Red-team</button>
+    <button class="cbtn" data-act="audit">🤖 AI Audit</button>
+    <button class="cbtn" data-act="compliance">📋 Compliance</button>
+  </span>
 </div>
 <div class="layout">
   <div class="panel" style="display:flex;flex-direction:column">
@@ -743,6 +809,33 @@ textarea {{ width: 100%; height: 46%; background: #0d1117; color: var(--text);
     <h2>Multi-agent dashboard</h2>
     <div class="sub">Every agent in this workspace, backed by the team store. Click one to open it.</div>
     <div class="board-grid" id="board-grid"></div>
+  </div>
+</div>
+<div id="toolpick" class="overlay">
+  <div class="modal">
+    <div class="mhead">
+      <b>Add tools</b><span class="mclose" id="tp-close">✕</span>
+      <div class="tabs">
+        <button class="tab active" data-tab="mcp">🔌 MCP tools</button>
+        <button class="tab" data-tab="custom">✏️ Custom tool</button>
+      </div>
+    </div>
+    <div id="tab-mcp" class="mbody">
+      <div class="sub">Attach tools from popular open-source MCP servers — risk flags come pre-set.</div>
+      <div id="mcp-list"></div>
+      <button id="mcp-add" class="primary" style="margin-top:10px">Add selected tools →</button>
+    </div>
+    <div id="tab-custom" class="mbody" style="display:none">
+      <div class="sub">Define your own tool. Flag its risk so the pipeline guards it.</div>
+      <input id="ct-name" placeholder="Tool name — e.g. Issue refund, Delete account, Query DB">
+      <div class="risk-toggles">
+        <label><input type="checkbox" id="ct-money"> 💰 moves money</label>
+        <label><input type="checkbox" id="ct-high_risk"> ⚠ high-risk (delete/deploy/grant)</label>
+        <label><input type="checkbox" id="ct-external"> 🌐 external egress</label>
+        <label><input type="checkbox" id="ct-pii"> 🔒 returns PII</label>
+      </div>
+      <button id="ct-add" class="primary" style="margin-top:10px">Add tool →</button>
+    </div>
   </div>
 </div>
 <script>{CANVAS_JS}</script>
@@ -972,15 +1065,56 @@ function renderTools() {{
     catch (e) {{ toast(e.message); }}
   }}));
 }}
-$('btn-addtool').addEventListener('click', async () => {{
+// ---- tool picker modal: MCP catalog + custom tools ----
+let MCP = null;
+async function openToolPicker() {{
   if (!STATE || !STATE.graph) return toast('Build an agent first');
-  const label = prompt('New tool name (e.g. "Issue refund", "Delete account", "Query database"):');
-  if (!label) return;
-  // Let the user pre-flag obvious risk in one prompt; they can toggle chips after.
-  const money = confirm('Does "' + label + '" move money / spend? (OK = yes)');
-  const risk = {{money}};
-  try {{ STATE = await api('/api/tool/add', {{label, risk}}); render(); toast('Added "' + label + '" — Simulate then Auto-fix to guard it'); }}
-  catch (e) {{ toast(e.message); }}
+  if (!MCP) {{ try {{ MCP = (await api('/api/mcp-catalog')).servers; }} catch (e) {{ MCP = []; }} }}
+  renderMcpList();
+  $('toolpick').classList.add('open');
+}}
+function riskFlags(r) {{
+  return Object.keys(r || {{}}).filter(k => r[k]).map(k => ({{money:'💰',high_risk:'⚠',external:'🌐',pii:'🔒'}}[k] || k)).join(' ');
+}}
+function renderMcpList() {{
+  const box = $('mcp-list'); box.innerHTML = '';
+  (MCP || []).forEach((s, si) => {{
+    const el = document.createElement('div'); el.className = 'mcp-server';
+    const tools = s.tools.map((t, ti) =>
+      `<label><input type="checkbox" data-s="${{si}}" data-t="${{ti}}"> ${{t.label}} <span class="rf">${{riskFlags(t.risk)}}</span></label>`).join('');
+    el.innerHTML = `<div class="sh"><span>${{s.icon||'🔌'}}</span><span class="sname">${{s.name}}</span>` +
+      `<span class="sdesc">${{s.desc}}</span></div><div class="mcp-tools">${{tools}}</div>`;
+    el.querySelector('.sh').addEventListener('click', () => el.querySelector('.mcp-tools').classList.toggle('open'));
+    box.appendChild(el);
+  }});
+}}
+$('btn-addtool').addEventListener('click', openToolPicker);
+$('tp-close').addEventListener('click', () => $('toolpick').classList.remove('open'));
+$('toolpick').addEventListener('click', e => {{ if (e.target === $('toolpick')) $('toolpick').classList.remove('open'); }});
+document.querySelectorAll('.modal .tab').forEach(tab => tab.addEventListener('click', () => {{
+  document.querySelectorAll('.modal .tab').forEach(t => t.classList.remove('active'));
+  tab.classList.add('active');
+  $('tab-mcp').style.display = tab.dataset.tab === 'mcp' ? 'block' : 'none';
+  $('tab-custom').style.display = tab.dataset.tab === 'custom' ? 'block' : 'none';
+}}));
+$('mcp-add').addEventListener('click', async () => {{
+  const picked = [...$('mcp-list').querySelectorAll('input:checked')].map(cb => {{
+    const s = MCP[cb.dataset.s]; return s.tools[cb.dataset.t];
+  }});
+  if (!picked.length) return toast('Select at least one tool');
+  try {{ STATE = await api('/api/tool/add-many', {{tools: picked}}); }} catch (e) {{ return toast(e.message); }}
+  $('toolpick').classList.remove('open'); render();
+  toast('Added ' + picked.length + ' tool(s) — Simulate then Auto-fix to guard them');
+}});
+$('ct-add').addEventListener('click', async () => {{
+  const label = $('ct-name').value.trim();
+  if (!label) return toast('Name the tool');
+  const risk = {{money: $('ct-money').checked, high_risk: $('ct-high_risk').checked,
+                external: $('ct-external').checked, pii: $('ct-pii').checked}};
+  try {{ STATE = await api('/api/tool/add', {{label, risk}}); }} catch (e) {{ return toast(e.message); }}
+  $('ct-name').value = ''; ['ct-money','ct-high_risk','ct-external','ct-pii'].forEach(id => $(id).checked = false);
+  $('toolpick').classList.remove('open'); render();
+  toast('Added "' + label + '" — Simulate then Auto-fix to guard it');
 }});
 let policyShown = false;
 $('btn-policy').addEventListener('click', () => {{
@@ -1162,7 +1296,8 @@ $('btn-fullaudit').addEventListener('click', async () => {{
   try {{ const d = await api('/api/full-audit', {{}}); openConsole('⚡ Full audit report', fullAuditHtml(d)); }}
   catch (e) {{ openConsole('⚡ Full audit', '<div class="violation">'+e.message+'</div>'); }}
 }});
-document.querySelectorAll('.cbtn').forEach(btn => btn.addEventListener('click', async () => {{
+$('analyze-toggle').addEventListener('click', () => $('analyze-menu').classList.toggle('open'));
+document.querySelectorAll('.cbtn[data-act]').forEach(btn => btn.addEventListener('click', async () => {{
   const act = btn.dataset.act;
   if (!STATE || !STATE.graph) return toast('Build an agent first');
   openConsole(TITLES[act], '<div class="spin">running ' + act + '…' + (act==='audit'||act==='redteam'?' (may call the model)':'') + '</div>');
@@ -1377,6 +1512,10 @@ def make_handler(workspace: Workspace):
                 self._send(200, state().snapshot())
             elif self.path == "/api/projects":
                 self._send(200, workspace.list())
+            elif self.path == "/api/mcp-catalog":
+                from agentproof.mcp_catalog import catalog
+
+                self._send(200, {"servers": catalog()})
             else:
                 self._send(404, {"error": "not found"})
 
@@ -1425,6 +1564,8 @@ def make_handler(workspace: Workspace):
                     result = st.deploy(body.get("target", "docker"))
                 elif self.path == "/api/tool/add":
                     result = st.add_tool(body.get("label", ""), body.get("risk"))
+                elif self.path == "/api/tool/add-many":
+                    result = st.add_tools(body.get("tools", []))
                 elif self.path == "/api/tool/remove":
                     result = st.remove_tool(body["id"])
                 elif self.path == "/api/tool/update":

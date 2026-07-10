@@ -257,6 +257,9 @@ A local web workbench (**Python stdlib only — no npm, no build step, no cloud*
 - **Animated attack replay** — a breached AI-audit finding plays back turn by turn: watch the attacker's messages and your agent's replies unfold like a live conversation, ending in 💥 breach.
 - **Multi-agent dashboard** — a project switcher and **▦ Board** view manage many agents in one workspace, each as a card with its grade and shippable status. It's backed by the same team ProjectStore as `agentproof serve`, so the Studio, the dashboard, and the hosted backend all read one source of truth.
 - **Live flow animation** — running a message lights each component in turn on the canvas as the message hops through it, so inter-node communication (planner → gate → tool → guard → output) is visible, not just logged.
+- **Visual spec editor** — a ⚙️ Visual / ✍️ Text toggle: name the agent, list capabilities, tick guardrails (spend limit, no-PII, no-secrets, resist injection/memory-poisoning, gate high-risk, handle failures) — no prose required. It compiles the structured spec directly and mirrors it back to editable prose.
+- **Tool editor + MCP catalog** — 🔧 add / rename / remove tools and toggle each one's risk (money / high-risk / external / PII) as chips. **＋ Add tool** opens a picker: attach whole toolsets from popular open-source **MCP servers** (GitHub, Stripe, Postgres, Slack, filesystem, web search, Drive, email) with risk flags pre-set, or define a fully custom tool. Adding a tool wires it into the agent loop; Simulate + Auto-fix then guard it.
+- **Draggable canvas** — rearrange the agent graph by dragging nodes; a click still opens the node's details.
 
 
 ## Import agents you already have
@@ -353,7 +356,7 @@ agentproof export ./agentproof-project -o ./my-agent
 my-agent/
 ├── agent/
 │   ├── graph.py        # LangGraph assembly, mirrors the verified canvas
-│   ├── tools.py        # tool stubs with retry/backoff wired in
+│   ├── tools.py        # fleshed-out tool scaffolds: typed state reads, example returns, retry/backoff, and a concrete `# TODO:` per tool (call Stripe / your DB / an MCP server) — LLM-written when a key is present, rich deterministic stubs otherwise
 │   ├── policy.py       # the behavior contract as executable code
 │   └── prompts.py
 ├── tests/

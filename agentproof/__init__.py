@@ -6,7 +6,7 @@ Pipeline: Prompt -> Behavior Spec -> Tests -> Agent Graph -> Simulation
           -> Auto-fix -> Code Export -> CI
 """
 
-__version__ = "0.15.0"
+__version__ = "0.16.0"
 
 from agentproof.spec import BehaviorSpec, Constraint, ConstraintKind, parse_spec
 from agentproof.graph import AgentGraph, Edge, Node, NodeType
@@ -24,6 +24,8 @@ from agentproof.team import BehaviorHistory, ReviewRequest, review
 from agentproof.export import export_agent
 from agentproof.export.smart_export import export_framework
 from agentproof.deploy import DEPLOY_TARGETS, generate_deploy
+from agentproof.toolgen import render_tools_module
+from agentproof.mcp_catalog import MCP_CATALOG, catalog as mcp_catalog
 from agentproof.badge import render_badge, score_badge, write_badge
 from agentproof.importers import (
     detect_format,
@@ -122,6 +124,9 @@ __all__ = [
     "export_framework",
     "generate_deploy",
     "DEPLOY_TARGETS",
+    "render_tools_module",
+    "MCP_CATALOG",
+    "mcp_catalog",
     "score_badge",
     "render_badge",
     "write_badge",

@@ -96,10 +96,36 @@ function edgePath(a, b) {
   return `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`;
 }
 
+// Session-scoped position overrides so dragged nodes stay put across re-renders.
+window.NODE_POS = window.NODE_POS || {};
+// Shared drag state + global listeners installed exactly once (no per-render leak).
+window.__drag = window.__drag || null;
+if (!window.__dragBound) {
+  window.__dragBound = true;
+  window.addEventListener('mousemove', evt => {
+    const d = window.__drag; if (!d) return;
+    const pt = d.svgPoint(evt);
+    d.pos[d.id].x = Math.max(0, pt.x - d.off.x);
+    d.pos[d.id].y = Math.max(0, pt.y - d.off.y);
+    window.NODE_POS[d.id] = { x: d.pos[d.id].x, y: d.pos[d.id].y };
+    d.moved = true; d.reposition(d.id);
+  });
+  window.addEventListener('mouseup', () => {
+    if (window.__drag) {
+      window.__lastDragMoved = window.__drag.moved;
+      if (window.__drag.g) window.__drag.g.style.cursor = 'grab';
+      window.__drag = null;
+    }
+  });
+}
 function renderGraph(svg, graph, onNodeClick) {
   const pos = layoutGraph(graph);
-  const maxX = Math.max(...Object.values(pos).map(p => p.x + p.w)) + 40;
-  const maxY = Math.max(...Object.values(pos).map(p => p.y + p.h)) + 80;
+  // Apply any user drags from this session.
+  Object.keys(pos).forEach(id => {
+    if (window.NODE_POS[id]) { pos[id].x = window.NODE_POS[id].x; pos[id].y = window.NODE_POS[id].y; }
+  });
+  const maxX = Math.max(...Object.values(pos).map(p => p.x + p.w)) + 60;
+  const maxY = Math.max(...Object.values(pos).map(p => p.y + p.h)) + 90;
   svg.setAttribute('width', maxX); svg.setAttribute('height', maxY);
   svg.innerHTML = `<defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
@@ -130,10 +156,33 @@ function renderGraph(svg, graph, onNodeClick) {
       svg.appendChild(t);
     }
   });
+  // Update the SVG geometry of a node + the edges touching it (used while dragging).
+  function reposition(id) {
+    const p = pos[id];
+    const g = svg.querySelector('.node[data-node="' + id + '"]');
+    if (!g) return;
+    g.querySelector('rect').setAttribute('x', p.x);
+    g.querySelector('rect').setAttribute('y', p.y);
+    const ts = g.querySelectorAll('text');
+    ts[0].setAttribute('x', p.x + 10); ts[0].setAttribute('y', p.y + 19);
+    ts[1].setAttribute('x', p.x + 10); ts[1].setAttribute('y', p.y + 35);
+    svg.querySelectorAll('path[data-edge]').forEach(path => {
+      const [s, t] = path.dataset.edge.split('->');
+      if (s === id || t === id) path.setAttribute('d', edgePath(pos[s], pos[t]));
+    });
+  }
+  function svgPoint(evt) {
+    const r = svg.getBoundingClientRect();
+    const vb = svg.viewBox.baseVal;
+    const sx = vb && vb.width ? vb.width / r.width : 1;
+    const sy = vb && vb.height ? vb.height / r.height : 1;
+    return { x: (evt.clientX - r.left) * sx, y: (evt.clientY - r.top) * sy };
+  }
   graph.nodes.forEach(n => {
     const p = pos[n.id];
     const g = document.createElementNS(ns, 'g');
     g.setAttribute('class', 'node'); g.dataset.node = n.id;
+    g.style.cursor = 'grab';
     const rect = document.createElementNS(ns, 'rect');
     rect.setAttribute('x', p.x); rect.setAttribute('y', p.y);
     rect.setAttribute('width', p.w); rect.setAttribute('height', p.h);
@@ -148,7 +197,20 @@ function renderGraph(svg, graph, onNodeClick) {
     t2.setAttribute('x', p.x + 10); t2.setAttribute('y', p.y + 35);
     t2.setAttribute('opacity', '0.6'); t2.textContent = n.type;
     g.appendChild(t1); g.appendChild(t2);
-    if (onNodeClick) g.addEventListener('click', () => onNodeClick(n));
+    // Drag to rearrange; a click that doesn't move still fires onNodeClick.
+    g.addEventListener('mousedown', evt => {
+      g.style.cursor = 'grabbing';
+      const pt = svgPoint(evt);
+      window.__drag = {
+        id: n.id, g, pos, reposition, svgPoint, moved: false,
+        off: { x: pt.x - pos[n.id].x, y: pt.y - pos[n.id].y },
+      };
+      evt.preventDefault();
+    });
+    g.addEventListener('click', () => {
+      const wasDrag = window.__lastDragMoved; window.__lastDragMoved = false;
+      if (!wasDrag && onNodeClick) onNodeClick(n);
+    });
     svg.appendChild(g);
   });
 }
