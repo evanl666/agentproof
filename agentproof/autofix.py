@@ -245,9 +245,10 @@ def _fix_high_risk_action(graph: AgentGraph) -> Fix | None:
     ]
     added: list[str] = []
     for tool in tools:
-        # Direct predecessors only — agent-loop back-edges make `upstream_has`
-        # traverse through other tools' gates and falsely report this one gated.
-        if any(p.type == NodeType.APPROVAL for p in graph.predecessors(tool.id)):
+        # Path-based gating check — consistent with the simulator and proofs.
+        # (A direct-predecessor check is fooled by chained guards; upstream_has
+        # is fooled by agent-loop back-edges through other tools' gates.)
+        if graph.is_gated(tool.id, lambda n: n.type == NodeType.APPROVAL):
             continue
         approval = Node(
             id=f"approval_{tool.id}",

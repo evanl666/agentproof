@@ -361,7 +361,7 @@ class _Run:
         if not (category or self.compromised or self.memory_compromised):
             return
         # Every high-risk tool must be individually gated; a malicious request
-        # succeeds if ANY high-risk tool has no approval directly before it.
+        # succeeds if ANY high-risk tool has an ungated path from the input.
         high_risk_tools = [
             n for n in self.graph.nodes
             if n.type == NodeType.TOOL and n.config.get("high_risk") and not n.config.get("spend")
@@ -370,7 +370,7 @@ class _Run:
             return
         tool = next(
             (t for t in high_risk_tools
-             if not any(p.type == NodeType.APPROVAL for p in self.graph.predecessors(t.id))),
+             if not self.graph.is_gated(t.id, lambda n: n.type == NodeType.APPROVAL)),
             None,
         )
         approved = tool is None

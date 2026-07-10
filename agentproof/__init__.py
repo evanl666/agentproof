@@ -6,7 +6,7 @@ Pipeline: Prompt -> Behavior Spec -> Tests -> Agent Graph -> Simulation
           -> Auto-fix -> Code Export -> CI
 """
 
-__version__ = "0.7.0"
+__version__ = "0.8.0"
 
 from agentproof.spec import BehaviorSpec, Constraint, ConstraintKind, parse_spec
 from agentproof.graph import AgentGraph, Edge, Node, NodeType
@@ -51,6 +51,13 @@ from agentproof.safetools import compile_openapi, compile_to_repo
 from agentproof.proof_movie import build_proof_movie_html, write_proof_movie
 from agentproof.risk import RiskCategory, classify_action, infer_tool_risk, is_sensitive
 from agentproof.smart import SmartSpecParser, SmartJudge, smart_parse_spec
+from agentproof.intelligence import (
+    SmartScenarioGen,
+    SmartSynthesizer,
+    smart_generate_scenarios,
+    smart_synthesize,
+    use_llm,
+)
 
 __all__ = [
     "BehaviorSpec",
@@ -140,4 +147,9 @@ __all__ = [
     "smart_parse_spec",
     "SmartSpecParser",
     "SmartJudge",
+    "smart_synthesize",
+    "smart_generate_scenarios",
+    "SmartSynthesizer",
+    "SmartScenarioGen",
+    "use_llm",
 ]

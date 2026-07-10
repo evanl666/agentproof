@@ -41,7 +41,15 @@ agentproof build --pack sql       # drop-table/delete approval + customer-data e
 agentproof build --pack sales     # admin-grant approval + personal-data + no-competitor
 ```
 
-And it's **smart, not just rules**: `--smart` parses your spec with an LLM (any phrasing, any domain, mapped onto the risk taxonomy), falling back to the deterministic rule-based parser when no key is present.
+And it's **LLM-native, not just rules**. When an Anthropic key is present, a model does the thinking at every step that benefits from understanding — parsing your spec in any phrasing, **designing the agent's tools and their risk profile**, inventing novel attacks, and judging real responses. No key? The whole thing runs on deterministic heuristics — same pipeline, fully offline and reproducible for CI.
+
+```bash
+agentproof build agent.md         # LLM parses the spec + designs the tools
+agentproof probe <url> proj/      # LLM judges the real responses
+agentproof redteam proj/ --save   # LLM invents attacks
+```
+
+The intelligence is a real model call (cheapest by default, Haiku) that gracefully degrades to heuristics — so a freeform paragraph like *"an incident-response bot that can restart services and page on-call; never restart prod without an SRE approving, never post credentials to the status page"* compiles straight to a verified, provably-safe agent.
 
 ## 60-second demo
 
@@ -360,7 +368,8 @@ agentproof/
 ├── infer.py       # infer a starter spec + risk scan from an agent's structure
 ├── proof_movie.py # counterexample replay movie (animated red bypass paths)
 ├── risk.py        # generic risk taxonomy — any domain, not just refund/money
-├── smart.py       # LLM intelligence layer (smart spec parsing + judge, pluggable)
+├── smart.py       # LLM spec parsing + response judging
+├── intelligence.py# LLM-native brain: graph synthesis + scenario gen, LLM-by-default
 ├── proofs.py      # static reachability proofs (structural safety invariants)
 ├── replay.py      # production trace replay → regression scenarios
 ├── redteam.py     # model-driven adversarial generation (Haiku) + offline fallback
@@ -477,7 +486,7 @@ tests real end-to-end behavior, not just the model in isolation.
 
 ```bash
 python -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest tests/ -v        # 196 tests, ~5s
+.venv/bin/pytest tests/ -v        # 204 tests, ~5s
 ```
 
 ## Roadmap
@@ -506,7 +515,8 @@ python -m venv .venv && .venv/bin/pip install -e ".[dev]"
 - [x] Generic risk taxonomy — verify any agent domain (coding / SQL / sales / ops), not just refund
 - [x] LLM intelligence layer — smart spec parsing (any phrasing), pluggable with rule-based fallback
 - [ ] Publish to PyPI and the GitHub Marketplace
-- [ ] LLM-based graph synthesis + more P1/P2 (mutation testing, coverage 2.0, PR bot, compliance report)
+- [x] LLM-native by default — spec parsing, graph synthesis, scenario generation, response judging (deterministic fallback offline)
+- [ ] More P1/P2: mutation testing, coverage 2.0, PR bot, compliance report
 
 ## License
 

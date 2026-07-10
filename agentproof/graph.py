@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable
@@ -134,6 +135,52 @@ class AgentGraph:
                     return True
                 stack.append(pred.id)
         return False
+
+    def path_avoiding(
+        self,
+        start_id: str,
+        is_target: Callable[[Node], bool],
+        is_barrier: Callable[[Node], bool],
+    ) -> list[str] | None:
+        """Shortest forward path from start to a target that never crosses a
+        barrier node. Returns the node-id path, or None if the target is
+        unreachable without crossing a barrier. This is the single source of
+        truth for "is X gated by Y" — used by proofs, the simulator and autofix,
+        so all three agree (a naive predecessor check is fooled by agent-loop
+        back-edges and by chained guards)."""
+        if not self.has_node(start_id):
+            return None
+        start = self.node(start_id)
+        if is_barrier(start):
+            return None
+        parents: dict[str, str] = {}
+        queue: deque[str] = deque([start_id])
+        seen = {start_id}
+        while queue:
+            current = queue.popleft()
+            node = self.node(current)
+            if current != start_id and is_target(node):
+                path = [current]
+                while path[-1] != start_id:
+                    path.append(parents[path[-1]])
+                return list(reversed(path))
+            for edge in self.edges:
+                if edge.source != current or edge.target in seen:
+                    continue
+                target_node = self.node(edge.target)
+                if is_barrier(target_node) and not is_target(target_node):
+                    continue
+                seen.add(edge.target)
+                parents[edge.target] = current
+                queue.append(edge.target)
+        return None
+
+    def is_gated(self, target_id: str, barrier: Callable[[Node], bool]) -> bool:
+        """True if every path from an input node to target crosses a barrier."""
+        entry = self.find(lambda n: n.type == NodeType.INPUT) or (self.nodes[0] if self.nodes else None)
+        if entry is None:
+            return True
+        return self.path_avoiding(entry.id, lambda n: n.id == target_id, barrier) is None
 
     def to_dict(self) -> dict[str, Any]:
         return {

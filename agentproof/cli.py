@@ -91,20 +91,26 @@ def cmd_build(args: argparse.Namespace) -> int:
         pack = get_pack(args.pack)
         spec_text = pack.spec_text
         spec = pack.spec()
+        graph = synthesize(spec)  # packs stay deterministic for stability
         scenarios = pack.scenarios(seed=args.seed, size=args.size)
         print(f"{_c(BOLD, f'Using {pack.name} pack')}: {pack.description}")
     else:
-        spec_text = Path(args.spec).read_text() if args.spec else DEFAULT_SPEC
-        if getattr(args, "smart", False):
-            from agentproof.smart import available, smart_parse_spec
+        from agentproof.intelligence import smart_generate_scenarios, smart_synthesize, use_llm
+        from agentproof.smart import smart_parse_spec
 
+        spec_text = Path(args.spec).read_text() if args.spec else DEFAULT_SPEC
+        smart = use_llm() and not getattr(args, "no_llm", False)
+        if smart:
             spec = smart_parse_spec(spec_text)
-            print(_c(DIM, "Parsed with the LLM backend" if available() else
-                    "LLM backend unavailable (no key) — used the rule-based parser"))
+            graph = smart_synthesize(spec)
+            print(_c(DIM, "🧠 LLM-native: spec parsed and tools designed by the model"))
         else:
             spec = parse_spec(spec_text)
-        scenarios = generate_scenarios(spec, seed=args.seed, size=args.size)
-    graph = synthesize(spec)
+            graph = synthesize(spec)
+        if smart and getattr(args, "smart_scenarios", False):
+            scenarios = smart_generate_scenarios(spec, n=args.size, seed=args.seed)
+        else:
+            scenarios = generate_scenarios(spec, seed=args.seed, size=args.size)
     project = Path(args.out)
     _save(
         project,
@@ -598,8 +604,16 @@ def cmd_probe(args: argparse.Namespace) -> int:
         spec = parse_spec(DEFAULT_SPEC)
         scenarios = generate_scenarios(spec, seed=args.seed, size=args.size)
     caller = http_agent(args.url, field_in=args.field_in, field_out=args.field_out)
-    print(f"{_c(BOLD, 'Black-box probe')} · {len(scenarios)} adversarial scenarios → {args.url}\n")
-    results = probe_agent(caller, spec, scenarios)
+    from agentproof.intelligence import use_llm
+
+    judge = None
+    if use_llm() and not args.no_llm:
+        from agentproof.smart import SmartJudge
+
+        judge = SmartJudge()
+    kind = "🧠 LLM judge" if judge else "pattern detector"
+    print(f"{_c(BOLD, 'Black-box probe')} · {len(scenarios)} scenarios → {args.url}  ({kind})\n")
+    results = probe_agent(caller, spec, scenarios, judge=judge)
     summary = probe_summary(results)
     for r in results:
         if not r.passed:
@@ -723,8 +737,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("spec", nargs="?", help="spec file (markdown or prose); default example")
     p.add_argument("--pack", choices=sorted(p_.id for p_ in list_packs()),
                    help="start from a domain scenario pack")
-    p.add_argument("--smart", action="store_true",
-                   help="parse the spec with the LLM backend (any phrasing/domain); falls back to rules")
+    p.add_argument("--no-llm", action="store_true",
+                   help="force the deterministic rule-based path (default is LLM-native when a key is present)")
+    p.add_argument("--smart-scenarios", action="store_true",
+                   help="also generate adversarial scenarios with the LLM (creative, non-deterministic)")
     p.add_argument("-o", "--out", default="./agentproof-project")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--size", type=int, default=50)
@@ -830,6 +846,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--spec", help="behavior spec to test against (else the project's, else default)")
     p.add_argument("--field-in", default="message", help="request JSON field for the user message")
     p.add_argument("--field-out", help="response JSON field to read the reply from")
+    p.add_argument("--no-llm", action="store_true", help="use the pattern detector instead of the LLM judge")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--size", type=int, default=50)
     p.add_argument("--check", action="store_true", help="exit 1 on any real-response violation")

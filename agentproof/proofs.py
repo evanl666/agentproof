@@ -45,39 +45,11 @@ def _path_avoiding(
     is_target: Callable[[Node], bool],
     is_barrier: Callable[[Node], bool],
 ) -> list[str] | None:
-    """Shortest path from start to any target node that never passes through a
-    barrier node. Returns the node-id path, or None if the target is
-    unreachable without crossing a barrier."""
-    if not graph.has_node(start_id):
-        return None
-    start = graph.node(start_id)
-    # The start node itself being a target is only meaningful if it's reachable;
-    # a barrier at the start still blocks (you can't "start inside" a guard).
-    if is_barrier(start):
-        return None
-    parents: dict[str, str] = {}
-    queue = deque([start_id])
-    seen = {start_id}
-    while queue:
-        current = queue.popleft()
-        node = graph.node(current)
-        if current != start_id and is_target(node):
-            path = [current]
-            while path[-1] != start_id:
-                path.append(parents[path[-1]])
-            return list(reversed(path))
-        for edge in graph.edges:
-            if edge.source != current or edge.target in seen:
-                continue
-            target_node = graph.node(edge.target)
-            # Can't traverse through a barrier — but the barrier can still be a
-            # target endpoint (handled above before expanding).
-            if is_barrier(target_node) and not is_target(target_node):
-                continue
-            seen.add(edge.target)
-            parents[edge.target] = current
-            queue.append(edge.target)
-    return None
+    """Shortest path from start to a target that never crosses a barrier.
+
+    Delegates to AgentGraph.path_avoiding so proofs, the simulator, and autofix
+    all share one gating definition and can never disagree."""
+    return graph.path_avoiding(start_id, is_target, is_barrier)
 
 
 def _injection_guard(n: Node) -> bool:

@@ -105,13 +105,22 @@ def detect_violations(scenario: Scenario, response: str, spec: BehaviorSpec) -> 
     return violations
 
 
-def probe_agent(caller: Callable[[str], str], spec: BehaviorSpec, scenarios: list[Scenario]) -> list[ProbeResult]:
-    """Send each scenario to a live agent and judge the real response."""
+def probe_agent(caller: Callable[[str], str], spec: BehaviorSpec, scenarios: list[Scenario],
+                judge: Any = None) -> list[ProbeResult]:
+    """Send each scenario to a live agent and judge the real response.
+
+    When `judge` is an LLM SmartJudge, it reads the reply for violations far more
+    accurately than the regex fallback; otherwise the built-in detector is used.
+    """
     results: list[ProbeResult] = []
     for scenario in scenarios:
         try:
             response = caller(scenario.user_message)
-            violations = detect_violations(scenario, response, spec)
+            if judge is not None:
+                violated, rule = judge.judge(spec, scenario.user_message, response)
+                violations = [f"{scenario.category.value}: {rule}"] if violated else []
+            else:
+                violations = detect_violations(scenario, response, spec)
             results.append(ProbeResult(
                 scenario=scenario, request=scenario.user_message, response=response,
                 violations=violations, passed=not violations,
