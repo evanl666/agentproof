@@ -25,7 +25,7 @@ from agentproof.export.langgraph import (
 )
 from agentproof.graph import AgentGraph, NodeType
 from agentproof.scenarios import Scenario
-from agentproof.spec import BehaviorSpec, ConstraintKind
+from agentproof.spec import BehaviorSpec, ConstraintKind, coerce_threshold
 
 
 def _tool_manifest(graph: AgentGraph) -> list[dict]:
@@ -64,7 +64,7 @@ def _llm_assembly(spec: BehaviorSpec, graph: AgentGraph, framework: str, model: 
 
     manifest = _tool_manifest(graph)
     limit = spec.constraint(ConstraintKind.SPEND_LIMIT)
-    threshold = float(limit.params.get("threshold", 50.0)) if limit else None
+    threshold = coerce_threshold(limit.params.get("threshold")) if limit else None
     ctx = (
         f"Target framework: {framework}\n"
         f"Agent name: {spec.name}\n"

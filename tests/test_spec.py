@@ -1,5 +1,37 @@
-from agentproof.spec import ConstraintKind, parse_spec
+import pytest
+
+from agentproof.spec import (
+    BehaviorSpec,
+    Constraint,
+    ConstraintKind,
+    coerce_threshold,
+    parse_spec,
+)
 from agentproof.studio import DEFAULT_SPEC
+
+
+@pytest.mark.parametrize("value,expected", [
+    (100, 100.0),
+    (49.5, 49.5),
+    ("$100", 100.0),
+    ("100 dollars", 100.0),
+    ("1,250", 1250.0),
+    ("order_total", 50.0),   # symbolic → safe default, must not raise
+    (None, 50.0),
+    ("", 50.0),
+])
+def test_coerce_threshold_never_crashes(value, expected):
+    assert coerce_threshold(value) == expected
+
+
+def test_auto_refund_limit_survives_nonnumeric_threshold():
+    # The LLM parser sometimes emits a symbolic threshold; reading it must not crash.
+    spec = BehaviorSpec(
+        name="X",
+        constraints=[Constraint(id="c1", kind=ConstraintKind.SPEND_LIMIT,
+                                description="over the order total", params={"threshold": "order_total"})],
+    )
+    assert spec.auto_refund_limit == 50.0
 
 
 def test_markdown_spec_parses_capabilities_and_constraints():

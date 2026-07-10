@@ -19,7 +19,14 @@ import json
 import os
 from typing import Any
 
-from agentproof.spec import BehaviorSpec, Capability, Constraint, ConstraintKind, parse_spec
+from agentproof.spec import (
+    BehaviorSpec,
+    Capability,
+    Constraint,
+    ConstraintKind,
+    coerce_threshold,
+    parse_spec,
+)
 
 _VALID_KINDS = {k.value for k in ConstraintKind}
 
@@ -114,6 +121,10 @@ class SmartSpecParser:
             ))
         # A spend limit implies an approval escape hatch, matching parse_spec.
         spend = next((c for c in constraints if c.kind == ConstraintKind.SPEND_LIMIT), None)
+        if spend is not None:
+            # Normalize whatever the model produced ("$100", "order_total", null)
+            # into a number so no downstream float() can blow up.
+            spend.params["threshold"] = coerce_threshold(spend.params.get("threshold"))
         if spend is not None and not any(c.kind == ConstraintKind.APPROVAL_REQUIRED for c in constraints):
             threshold = spend.params.get("threshold")
             constraints.append(Constraint(

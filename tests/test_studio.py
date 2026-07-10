@@ -1,6 +1,7 @@
 import json
 import threading
 import urllib.request
+from pathlib import Path
 from http.server import ThreadingHTTPServer
 
 import pytest
@@ -26,8 +27,8 @@ def test_state_build_simulate_fix_export(tmp_path):
     assert snapshot["fixes"]
 
     result = state.export()
-    assert (tmp_path / "export" / "agent" / "graph.py").exists()
-    assert result["files"]
+    assert (tmp_path / "export" / "langgraph" / "agent" / "graph.py").exists()
+    assert result["files"] and result["framework"] == "langgraph"
 
 
 def test_state_persists_across_restarts(tmp_path):
@@ -153,6 +154,74 @@ def test_console_requires_build(tmp_path):
     state = StudioState(tmp_path)
     with pytest.raises(ValueError):
         state.prove()
+
+
+def test_tool_editing_add_update_remove(tmp_path):
+    from agentproof.graph import NodeType
+
+    state = StudioState(tmp_path)
+    state.build(DEFAULT_SPEC)
+    before = {n.id for n in state.graph.nodes_of_type(NodeType.TOOL)}
+
+    # Add a high-risk tool; it must be wired into the agent loop and flagged.
+    snap = state.add_tool("Delete customer account", risk={"high_risk": True})
+    tid = snap["added_tool"]
+    assert tid not in before
+    node = state.graph.node(tid)
+    assert node.type == NodeType.TOOL and node.config.get("high_risk") is True
+    touching = [(e.source, e.target) for e in state.graph.edges if tid in (e.source, e.target)]
+    assert len(touching) == 2  # planner -> tool -> planner
+
+    # Editing a message invalidates stale results.
+    state.simulate()
+    assert state.results
+    state.update_tool(tid, label="Delete account", risk={"high_risk": True, "external": True})
+    assert state.results == []
+    assert state.graph.node(tid).label == "Delete account"
+    assert state.graph.node(tid).config.get("external") is True
+
+    # Auto-fix must guard the new high-risk tool to shippable.
+    state.simulate()
+    state.apply_autofix()
+    assert all(r.passed for r in state.results)
+
+    # Remove it.
+    state.remove_tool(tid)
+    assert not state.graph.has_node(tid)
+    assert not any(tid in (e.source, e.target) for e in state.graph.edges)
+
+
+def test_tool_edit_errors(tmp_path):
+    state = StudioState(tmp_path)
+    with pytest.raises(ValueError):
+        state.add_tool("x")  # no graph yet
+    state.build(DEFAULT_SPEC)
+    with pytest.raises(ValueError):
+        state.add_tool("")  # empty name
+    with pytest.raises(KeyError):
+        state.remove_tool("does_not_exist")
+    with pytest.raises(ValueError):
+        state.remove_tool("planner")  # not a tool
+
+
+def test_export_any_framework_and_deploy(tmp_path, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    state = StudioState(tmp_path)
+    state.build(DEFAULT_SPEC)
+    state.simulate()
+    state.apply_autofix()
+
+    # Deterministic exporter.
+    lg = state.export("langgraph")
+    assert lg["framework"] == "langgraph" and lg["files"]
+    # Flexible (LLM-assembled, offline scaffold) exporter for an arbitrary framework.
+    lc = state.export("langchain")
+    assert any("agent.py" in f for f in lc["files"])
+
+    dep = state.deploy("flyio")
+    assert dep["target"] == "flyio"
+    names = {Path(f).name for f in dep["files"]}
+    assert {"server.py", "guards.py", "fly.toml"} <= names
 
 
 def test_full_audit_shippable_vs_naive(tmp_path):

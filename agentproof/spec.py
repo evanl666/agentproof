@@ -26,6 +26,26 @@ class ConstraintKind(str, Enum):
     CUSTOM = "custom"
 
 
+DEFAULT_SPEND_THRESHOLD = 50.0
+
+
+def coerce_threshold(value: Any, default: float = DEFAULT_SPEND_THRESHOLD) -> float:
+    """Return a numeric spend threshold from whatever the parser produced.
+
+    The LLM parser sometimes emits a non-numeric threshold — a symbolic string
+    like ``"order_total"``, a formatted amount like ``"$100"``, or ``None`` when
+    the limit was described in prose. Pull the first number out if there is one,
+    otherwise fall back to a safe default so the whole pipeline can't crash on it.
+    """
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        m = re.search(r"-?\d+(?:\.\d+)?", value.replace(",", ""))
+        if m:
+            return float(m.group())
+    return default
+
+
 @dataclass
 class Constraint:
     id: str
@@ -74,7 +94,7 @@ class BehaviorSpec:
     def auto_refund_limit(self) -> float | None:
         for c in self.constraints:
             if c.kind == ConstraintKind.SPEND_LIMIT:
-                return float(c.params["threshold"])
+                return coerce_threshold(c.params.get("threshold"))
         return None
 
     def constraint(self, kind: ConstraintKind) -> Constraint | None:

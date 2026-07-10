@@ -22,8 +22,7 @@ from typing import Any
 from agentproof.autofix import autofix
 from agentproof.coverage import compute_coverage
 from agentproof.diff import behavior_diff
-from agentproof.export import export_langgraph
-from agentproof.graph import AgentGraph
+from agentproof.graph import AgentGraph, Node, NodeType
 from agentproof.importers import import_generic_json, import_python_agent
 from agentproof.report import CANVAS_CSS, CANVAS_JS
 from agentproof.scenarios import Scenario, generate_scenarios
@@ -230,15 +229,121 @@ class StudioState:
         snapshot["diff"] = diff.to_dict()
         return snapshot
 
-    def export(self) -> dict[str, Any]:
+    def export(self, framework: str = "langgraph") -> dict[str, Any]:
         if not (self.spec and self.graph):
             raise ValueError("Build or import an agent first")
-        out_dir = self.project_dir / "export"
-        written = export_langgraph(self.spec, self.graph, self.scenarios, out_dir)
+        from agentproof.export import export_agent
+
+        out_dir = self.project_dir / "export" / framework
+        written = export_agent(framework, self.spec, self.graph, self.scenarios, out_dir)
         return {
+            "framework": framework,
             "exported_to": str(out_dir),
             "files": [str(p.relative_to(self.project_dir)) for p in written],
         }
+
+    def deploy(self, target: str = "docker") -> dict[str, Any]:
+        if not self.spec:
+            raise ValueError("Build or import an agent first")
+        from agentproof.deploy import generate_deploy
+
+        out_dir = self.project_dir / "deploy"
+        written = generate_deploy(self.spec, target, out_dir)
+        return {
+            "target": target,
+            "deployed_to": str(out_dir),
+            "files": [str(p.relative_to(self.project_dir)) for p in written],
+        }
+
+    # -- tool editing: let the user shape the agent, not just accept what's generated --
+
+    _RISK_KEYS = {
+        "money": "spend",
+        "high_risk": "high_risk",
+        "external": "external",
+        "pii": "returns_pii",
+    }
+
+    def _planner_id(self) -> str | None:
+        """The node that dispatches to tools (the agent-loop hub)."""
+        # Both the deterministic and LLM synthesizers create an explicit planner.
+        if self.graph.has_node("planner") and self.graph.node("planner").type == NodeType.LLM:
+            return "planner"
+        tool_ids = {n.id for n in self.graph.nodes_of_type(NodeType.TOOL)}
+        for n in self.graph.nodes_of_type(NodeType.LLM):
+            if any(s.id in tool_ids for s in self.graph.successors(n.id)):
+                return n.id
+        llms = self.graph.nodes_of_type(NodeType.LLM)
+        return llms[0].id if llms else None
+
+    @staticmethod
+    def _slug_tool(label: str, existing: set[str]) -> str:
+        base = "".join(c if c.isalnum() else "_" for c in label.lower()).strip("_") or "tool"
+        tid = base
+        i = 2
+        while tid in existing:
+            tid = f"{base}_{i}"
+            i += 1
+        return tid
+
+    def add_tool(self, label: str, risk: dict[str, Any] | None = None) -> dict[str, Any]:
+        if not self.graph:
+            raise ValueError("Build or import an agent first")
+        label = (label or "").strip()
+        if not label:
+            raise ValueError("Tool needs a name")
+        planner = self._planner_id()
+        if not planner:
+            raise ValueError("This graph has no planner to attach a tool to")
+        tid = self._slug_tool(label, {n.id for n in self.graph.nodes})
+        config: dict[str, Any] = {}
+        for flag, key in self._RISK_KEYS.items():
+            if (risk or {}).get(flag):
+                config[key] = True
+        self.graph.add_node(Node(id=tid, type=NodeType.TOOL, label=label, config=config))
+        # Wire into the agent loop: planner -> tool -> planner.
+        self.graph.add_edge(planner, tid, label="tool call")
+        self.graph.add_edge(tid, planner, label="result")
+        self.results = []
+        self.fixes = []
+        self.save()
+        snap = self.snapshot()
+        snap["added_tool"] = tid
+        return snap
+
+    def remove_tool(self, tool_id: str) -> dict[str, Any]:
+        if not self.graph:
+            raise ValueError("Build or import an agent first")
+        node = self.graph.node(tool_id)  # raises KeyError if missing
+        if node.type != NodeType.TOOL:
+            raise ValueError(f"{tool_id!r} is not a tool")
+        self.graph.nodes = [n for n in self.graph.nodes if n.id != tool_id]
+        self.graph.edges = [e for e in self.graph.edges
+                            if e.source != tool_id and e.target != tool_id]
+        self.results = []
+        self.fixes = []
+        self.save()
+        return self.snapshot()
+
+    def update_tool(self, tool_id: str, label: str | None = None,
+                    risk: dict[str, Any] | None = None) -> dict[str, Any]:
+        if not self.graph:
+            raise ValueError("Build or import an agent first")
+        node = self.graph.node(tool_id)
+        if node.type != NodeType.TOOL:
+            raise ValueError(f"{tool_id!r} is not a tool")
+        if label and label.strip():
+            node.label = label.strip()
+        if risk is not None:
+            for flag, key in self._RISK_KEYS.items():
+                if risk.get(flag):
+                    node.config[key] = True
+                else:
+                    node.config.pop(key, None)
+        self.results = []
+        self.fixes = []
+        self.save()
+        return self.snapshot()
 
     def run_message(self, message: str, approved: bool = False) -> dict[str, Any]:
         if not (self.spec and self.graph):
@@ -391,6 +496,21 @@ textarea {{ width: 100%; height: 46%; background: #0d1117; color: var(--text);
 .turn {{ font-size: 12px; margin: 4px 0; padding: 6px 8px; border-radius: 6px; background: #0d1117; transition: opacity .35s ease; }}
 .replay {{ margin-top: 4px; }}
 .spin {{ color: var(--muted); padding: 20px; }}
+.ship-group {{ display: inline-flex; gap: 0; align-items: stretch; }}
+.ship-group select {{ background: #0d1117; color: var(--text); border: 1px solid var(--border);
+  border-right: none; border-radius: 6px 0 0 6px; padding: 6px 8px; font-size: 12px; }}
+.ship-group button {{ border-radius: 0 6px 6px 0; }}
+.mini {{ padding: 3px 9px !important; font-size: 12px; }}
+.tool-row {{ display: flex; align-items: center; gap: 8px; padding: 8px 6px; border-bottom: 1px solid #21262d; }}
+.tool-row .tname {{ flex: 1; font-size: 13px; }}
+.tool-row .rm {{ cursor: pointer; color: var(--muted); font-size: 15px; }}
+.tool-row .rm:hover {{ color: #f85149; }}
+.risk-chip {{ font-size: 10px; padding: 2px 7px; border-radius: 9px; cursor: pointer; border: 1px solid var(--border);
+  color: var(--muted); user-select: none; }}
+.risk-chip.on-money {{ background: rgba(210,153,34,.18); color: #d29922; border-color: #d29922; }}
+.risk-chip.on-high_risk {{ background: rgba(248,81,73,.16); color: #f85149; border-color: #f85149; }}
+.risk-chip.on-external {{ background: rgba(88,166,255,.16); color: #58a6ff; border-color: #58a6ff; }}
+.risk-chip.on-pii {{ background: rgba(163,113,247,.18); color: #a371f7; border-color: #a371f7; }}
 .projbar {{ display: flex; gap: 6px; align-items: center; }}
 .projbar select {{ background: #0d1117; color: var(--text); border: 1px solid var(--border);
   border-radius: 6px; padding: 6px 10px; font-size: 13px; max-width: 220px; }}
@@ -432,7 +552,34 @@ textarea {{ width: 100%; height: 46%; background: #0d1117; color: var(--text);
     <button id="btn-simulate">▶ Simulate</button>
     <button id="btn-autofix">🛠 Auto-fix</button>
     <button id="btn-policy">Policy lines</button>
-    <button id="btn-export">Export code</button>
+    <span class="ship-group">
+      <select id="export-fw" title="Target framework">
+        <option value="langgraph">LangGraph</option>
+        <option value="openai">OpenAI Agents SDK</option>
+        <option value="crewai">CrewAI</option>
+        <option value="typescript">TypeScript</option>
+        <option value="langchain">LangChain</option>
+        <option value="autogen">AutoGen</option>
+        <option value="pydantic-ai">Pydantic AI</option>
+        <option value="agno">Agno</option>
+        <option value="google-adk">Google ADK</option>
+        <option value="semantic-kernel">Semantic Kernel</option>
+      </select>
+      <button id="btn-export">Export ↧</button>
+    </span>
+    <span class="ship-group">
+      <select id="deploy-target" title="Deploy target">
+        <option value="docker">Docker</option>
+        <option value="flyio">Fly.io</option>
+        <option value="railway">Railway</option>
+        <option value="render">Render</option>
+        <option value="cloudrun">Cloud Run</option>
+        <option value="modal">Modal</option>
+        <option value="heroku">Heroku</option>
+        <option value="all">All targets</option>
+      </select>
+      <button id="btn-deploy">Deploy 🚀</button>
+    </span>
   </div>
 </header>
 <div class="console-bar">
@@ -455,6 +602,8 @@ textarea {{ width: 100%; height: 46%; background: #0d1117; color: var(--text);
   </div>
   <div class="panel" id="canvas-wrap"><h2>Agent canvas</h2><svg id="graph"></svg></div>
   <div class="panel">
+    <h2>🔧 Tools <button id="btn-addtool" class="mini" style="float:right">＋ Add tool</button></h2>
+    <div class="detail" id="tools"><p class="muted">Build an agent to edit its tools.</p></div>
     <h2>Agent score</h2><div class="scorebar" id="score"></div>
     <h2>Run it live</h2>
     <div class="detail">
@@ -507,6 +656,7 @@ function render() {{
   if (!STATE) return;
   $('spec').value = STATE.spec_text || '';
   if (STATE.graph) renderGraph(svg, STATE.graph, showNode);
+  renderTools();
   const list = $('scenarios'); list.innerHTML = '';
   const results = STATE.results || [];
   const byId = {{}};
@@ -583,7 +733,65 @@ $('btn-autofix').addEventListener('click', async () => {{
   render(); toast(STATE.fixes.length + ' structural fixes applied and re-verified');
 }});
 $('btn-export').addEventListener('click', async () => {{
-  try {{ const r = await api('/api/export', {{}}); toast('Exported ' + r.files.length + ' files to ' + r.exported_to); }}
+  const fw = $('export-fw').value;
+  toast('Exporting ' + fw + '… (may call the model for unusual frameworks)');
+  try {{ const r = await api('/api/export', {{framework: fw}}); toast('Exported ' + r.files.length + ' ' + fw + ' files → ' + r.exported_to); }}
+  catch (e) {{ toast(e.message); }}
+}});
+$('btn-deploy').addEventListener('click', async () => {{
+  const t = $('deploy-target').value;
+  try {{ const r = await api('/api/deploy', {{target: t}}); toast('Deploy artifacts (' + t + '): ' + r.files.length + ' files → ' + r.deployed_to); }}
+  catch (e) {{ toast(e.message); }}
+}});
+
+// ---- tool editor: shape the agent, don't just accept what was generated ----
+const RISK_LABELS = {{money: '💰 money', high_risk: '⚠ high-risk', external: '🌐 external', pii: '🔒 PII'}};
+function toolRisk(node) {{
+  const c = node.config || {{}};
+  return {{money: !!c.spend, high_risk: !!c.high_risk, external: !!c.external, pii: !!(c.returns_pii || c.sensitive)}};
+}}
+function renderTools() {{
+  const box = $('tools');
+  if (!STATE || !STATE.graph) {{ box.innerHTML = '<p class="muted">Build an agent to edit its tools.</p>'; return; }}
+  const tools = STATE.graph.nodes.filter(n => n.type === 'tool');
+  if (!tools.length) {{ box.innerHTML = '<p class="muted">No tools yet — click ＋ Add tool.</p>'; return; }}
+  box.innerHTML = '';
+  tools.forEach(n => {{
+    const risk = toolRisk(n);
+    const row = document.createElement('div');
+    row.className = 'tool-row';
+    const chips = Object.keys(RISK_LABELS).map(k =>
+      `<span class="risk-chip ${{risk[k] ? 'on-' + k : ''}}" data-tool="${{n.id}}" data-flag="${{k}}">${{RISK_LABELS[k]}}</span>`).join('');
+    row.innerHTML = `<span class="tname" title="click to rename" data-rename="${{n.id}}">${{n.label}}</span>${{chips}}<span class="rm" data-rm="${{n.id}}" title="remove">✕</span>`;
+    box.appendChild(row);
+  }});
+  box.querySelectorAll('.risk-chip').forEach(chip => chip.addEventListener('click', async () => {{
+    const id = chip.dataset.tool, node = STATE.graph.nodes.find(n => n.id === id);
+    const risk = toolRisk(node); risk[chip.dataset.flag] = !risk[chip.dataset.flag];
+    try {{ STATE = await api('/api/tool/update', {{id, risk}}); render(); toast('Tool risk updated — re-simulate to re-verify'); }}
+    catch (e) {{ toast(e.message); }}
+  }}));
+  box.querySelectorAll('.rm').forEach(x => x.addEventListener('click', async () => {{
+    if (!confirm('Remove this tool?')) return;
+    try {{ STATE = await api('/api/tool/remove', {{id: x.dataset.rm}}); render(); toast('Tool removed'); }}
+    catch (e) {{ toast(e.message); }}
+  }}));
+  box.querySelectorAll('[data-rename]').forEach(el => el.addEventListener('click', async () => {{
+    const cur = STATE.graph.nodes.find(n => n.id === el.dataset.rename);
+    const label = prompt('Rename tool:', cur.label);
+    if (!label || label === cur.label) return;
+    try {{ STATE = await api('/api/tool/update', {{id: el.dataset.rename, label}}); render(); toast('Renamed'); }}
+    catch (e) {{ toast(e.message); }}
+  }}));
+}}
+$('btn-addtool').addEventListener('click', async () => {{
+  if (!STATE || !STATE.graph) return toast('Build an agent first');
+  const label = prompt('New tool name (e.g. "Issue refund", "Delete account", "Query database"):');
+  if (!label) return;
+  // Let the user pre-flag obvious risk in one prompt; they can toggle chips after.
+  const money = confirm('Does "' + label + '" move money / spend? (OK = yes)');
+  const risk = {{money}};
+  try {{ STATE = await api('/api/tool/add', {{label, risk}}); render(); toast('Added "' + label + '" — Simulate then Auto-fix to guard it'); }}
   catch (e) {{ toast(e.message); }}
 }});
 let policyShown = false;
@@ -1022,7 +1230,15 @@ def make_handler(workspace: Workspace):
                 elif self.path == "/api/autofix":
                     result = st.apply_autofix()
                 elif self.path == "/api/export":
-                    result = st.export()
+                    result = st.export(body.get("framework", "langgraph"))
+                elif self.path == "/api/deploy":
+                    result = st.deploy(body.get("target", "docker"))
+                elif self.path == "/api/tool/add":
+                    result = st.add_tool(body.get("label", ""), body.get("risk"))
+                elif self.path == "/api/tool/remove":
+                    result = st.remove_tool(body["id"])
+                elif self.path == "/api/tool/update":
+                    result = st.update_tool(body["id"], body.get("label"), body.get("risk"))
                 elif self.path == "/api/run":
                     result = st.run_message(body["message"], body.get("approved", False))
                 elif self.path == "/api/prove":
