@@ -67,6 +67,14 @@ def _infer_node_type(name: str, hint: str = "") -> tuple[NodeType, dict[str, Any
     for keyword, extra in _TOOL_HINTS.items():
         if keyword in text:
             config.update(extra)
+    # An egress node (email/SMS/webhook) *sends* data; it is not a PII source.
+    # Any PII it transmits came from an upstream lookup, so strip the
+    # datasource/returns_pii flags a name collision may have added ("Notify
+    # Customer Email" matches both "customer" and "email"). Otherwise the node
+    # re-loads PII inside its own step and no upstream guard can protect it.
+    if config.get("external"):
+        config.pop("datasource", None)
+        config.pop("returns_pii", None)
     return NodeType.TOOL, config
 
 
@@ -146,6 +154,73 @@ def import_langgraph(source: str, name: str = "Imported LangGraph agent") -> Age
             if node.id not in targets and node.type != NodeType.OUTPUT:
                 node.type = NodeType.INPUT
                 break
+    return graph
+
+
+# Decorator names that mark a function as an agent tool, across frameworks:
+# Claude Agent SDK (@tool), OpenAI Agents SDK (@function_tool / @beta_tool),
+# GitHub Copilot extensions / LangChain (@tool), CrewAI (@tool), generic (@app.tool).
+_TOOL_DECORATORS = {"tool", "function_tool", "beta_tool", "async_tool", "ai_function", "kernel_function"}
+
+
+def _decorator_name(dec: ast.AST) -> str | None:
+    """Get the base name of a decorator, whether bare, called, or attribute."""
+    if isinstance(dec, ast.Call):
+        dec = dec.func
+    if isinstance(dec, ast.Name):
+        return dec.id
+    if isinstance(dec, ast.Attribute):
+        return dec.attr
+    return None
+
+
+def import_python_agent(source: str, name: str = "Imported agent") -> AgentGraph:
+    """Import a tool-calling Python agent (Claude Agent SDK, OpenAI Agents SDK,
+    GitHub Copilot extension, CrewAI, LangChain, ...) by AST-extracting its
+    `@tool`-style decorated functions.
+
+    These frameworks describe an agent as a model plus a set of tools rather
+    than an explicit graph, so we synthesize the canonical agent-loop shape:
+    input -> planner (LLM) -> tools -> responder -> egress -> output. That graph
+    then simulates, auto-fixes, and re-exports like any other.
+    """
+    tree = ast.parse(source)
+    tool_names: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if any(_decorator_name(d) in _TOOL_DECORATORS for d in node.decorator_list):
+                if node.name not in tool_names:
+                    tool_names.append(node.name)
+
+    graph = AgentGraph(name=name)
+    graph.add_node(Node(id="input", type=NodeType.INPUT, label="User request"))
+    graph.add_node(Node(id="planner", type=NodeType.LLM, label="Agent planner", config={"model": "imported"}))
+    graph.add_edge("input", "planner")
+
+    external_ids: list[str] = []
+    for tool_name in tool_names:
+        node_type, config = _infer_node_type(tool_name)
+        if node_type != NodeType.TOOL:
+            # Non-tool inference (e.g. a "send_reply" guard-ish name) still runs
+            # as a tool in these frameworks — keep it a tool but carry its hints.
+            config = {} if not isinstance(config, dict) else config
+            node_type = NodeType.TOOL
+        graph.add_node(Node(id=tool_name, type=node_type, label=tool_name, config=config))
+        if config.get("external"):
+            external_ids.append(tool_name)
+        else:
+            graph.add_edge("planner", tool_name, label="tool call")
+            graph.add_edge(tool_name, "planner", label="result")
+
+    graph.add_node(Node(id="responder", type=NodeType.LLM, label="Compose response", config={"model": "imported"}))
+    graph.add_edge("planner", "responder")
+    graph.add_node(Node(id="output", type=NodeType.OUTPUT, label="Done"))
+    if external_ids:
+        for ext in external_ids:
+            graph.add_edge("responder", ext)
+            graph.add_edge(ext, "output")
+    else:
+        graph.add_edge("responder", "output")
     return graph
 
 
@@ -359,10 +434,24 @@ def _load_structured(path: Path) -> dict[str, Any]:
     return json.loads(text)
 
 
+def import_python_source(source: str, name: str = "Imported agent") -> AgentGraph:
+    """Import a Python agent: LangGraph StateGraph if present, else a
+    tool-calling agent (Claude/OpenAI/Copilot/CrewAI/LangChain)."""
+    is_langgraph = any(
+        isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Attribute)
+        and n.func.attr in ("add_node", "add_edge", "add_conditional_edges")
+        for n in ast.walk(ast.parse(source))
+    )
+    if is_langgraph:
+        return import_langgraph(source, name=name)
+    return import_python_agent(source, name=name)
+
+
 def import_agent(path: str | Path, name: str | None = None) -> AgentGraph:
     """Import an agent from a file, dispatching on extension and content."""
     path = Path(path)
     if path.suffix == ".py":
-        return import_langgraph(path.read_text(), name=name or path.stem)
+        return import_python_source(path.read_text(), name=name or path.stem)
     data = _load_structured(path)
     return import_generic_json(data, name=name or data.get("name", path.stem))

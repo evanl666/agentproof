@@ -6,7 +6,7 @@ Pipeline: Prompt -> Behavior Spec -> Tests -> Agent Graph -> Simulation
           -> Auto-fix -> Code Export -> CI
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 from agentproof.spec import BehaviorSpec, Constraint, ConstraintKind, parse_spec
 from agentproof.graph import AgentGraph, Edge, Node, NodeType
@@ -29,6 +29,14 @@ from agentproof.importers import (
     import_dify,
     import_n8n,
     import_openai_builder,
+    import_python_agent,
+)
+from agentproof.runtime import (
+    AgentRuntime,
+    ClaudePlanner,
+    LocalPlanner,
+    RunResult,
+    default_planner,
 )
 
 __all__ = [
@@ -77,4 +85,10 @@ __all__ = [
     "import_n8n",
     "import_dify",
     "import_openai_builder",
+    "import_python_agent",
+    "AgentRuntime",
+    "LocalPlanner",
+    "ClaudePlanner",
+    "RunResult",
+    "default_planner",
 ]

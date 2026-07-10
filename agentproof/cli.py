@@ -459,6 +459,42 @@ jobs:
 """
 
 
+def cmd_run(args: argparse.Namespace) -> int:
+    """Run the verified agent live against a message — no export needed."""
+    from agentproof.runtime import AgentRuntime, ClaudePlanner, LocalPlanner, default_planner
+
+    project = Path(args.project)
+    spec, graph = _load_spec(project), _load_graph(project)
+    if args.model:
+        planner = ClaudePlanner(model=args.model)
+    elif args.local:
+        planner = LocalPlanner()
+    else:
+        planner = default_planner()
+    runtime = AgentRuntime(graph, spec, planner=planner)
+    result = runtime.run(args.message, approved_by_human=args.approve)
+
+    print(f"{_c(BOLD, 'user')}: {args.message}")
+    for step in result.trace:
+        icon = {"guard": "🛡", "condition": "⚖", "approval": "✋", "tool": "🔧",
+                "planner": "🧠", "responder": "✍", "input": "→", "output": "✓"}.get(step.kind, "·")
+        print(f"  {icon} {_c(DIM, step.node_id)}: {step.detail}")
+    print(f"{_c(BOLD, 'agent')}: {result.reply}")
+    tags = []
+    if result.flagged_injection:
+        tags.append(_c(YELLOW, "injection-quarantined") if any(s.kind == "guard" for s in result.trace) else _c(RED, "injection-LEAKED"))
+    if result.redacted_pii:
+        tags.append(_c(GREEN, "pii-redacted"))
+    if result.approval_required:
+        tags.append(_c(CYAN, "approval-required"))
+    if result.actions:
+        tags.append("actions: " + ", ".join(result.actions))
+    if tags:
+        print("  " + " · ".join(tags))
+    print(f"  {_c(DIM, 'planner: ' + result.planner)}")
+    return 1 if result.blocked and args.check else 0
+
+
 def cmd_studio(args: argparse.Namespace) -> int:
     serve(args.dir, port=args.port, open_browser=not args.no_browser)
     return 0
@@ -624,6 +660,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--port", type=int, default=4600)
     p.add_argument("--no-browser", action="store_true")
     p.set_defaults(fn=cmd_serve)
+
+    p = sub.add_parser("run", help="run the verified agent live against a message (no export)")
+    p.add_argument("project")
+    p.add_argument("-m", "--message", required=True, help="the user message to run")
+    p.add_argument("--model", help="use a real Claude model as the planner (e.g. claude-haiku-4-5)")
+    p.add_argument("--local", action="store_true", help="force the deterministic offline planner")
+    p.add_argument("--approve", action="store_true", help="simulate a human approving the action")
+    p.add_argument("--check", action="store_true", help="exit 1 if the run was blocked")
+    p.set_defaults(fn=cmd_run)
 
     p = sub.add_parser("studio", help="launch the local visual IDE")
     p.add_argument("--dir", default=".")

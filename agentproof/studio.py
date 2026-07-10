@@ -167,6 +167,14 @@ class StudioState:
             "files": [str(p.relative_to(self.project_dir)) for p in written],
         }
 
+    def run_message(self, message: str, approved: bool = False) -> dict[str, Any]:
+        if not (self.spec and self.graph):
+            raise ValueError("Build or import an agent first")
+        from agentproof.runtime import AgentRuntime, default_planner
+
+        runtime = AgentRuntime(self.graph, self.spec, planner=default_planner())
+        return runtime.run(message, approved_by_human=approved).to_dict()
+
 
 def _studio_html() -> str:
     return f"""<!DOCTYPE html>
@@ -207,6 +215,17 @@ textarea {{ width: 100%; height: 46%; background: #0d1117; color: var(--text);
   <div class="panel" id="canvas-wrap"><h2>Agent canvas</h2><svg id="graph"></svg></div>
   <div class="panel">
     <h2>Agent score</h2><div class="scorebar" id="score"></div>
+    <h2>Run it live</h2>
+    <div class="detail">
+      <div style="display:flex;gap:6px">
+        <input id="run-msg" placeholder="Message the agent…" style="flex:1;background:#0d1117;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px">
+        <button id="btn-run">Run</button>
+      </div>
+      <label style="font-size:12px;color:var(--muted);display:block;margin-top:6px">
+        <input type="checkbox" id="run-approve"> simulate human approval
+      </label>
+      <div id="run-out"></div>
+    </div>
     <h2>Details</h2><div class="detail" id="detail"><p class="muted">Build an agent to begin.</p></div>
     <div id="fixes"></div>
   </div>
@@ -329,6 +348,28 @@ $('btn-policy').addEventListener('click', () => {{
     toast(STATE.policy.open ? STATE.policy.open + ' policy line(s) OPEN' : 'all policy lines satisfied');
   }}
 }});
+async function runAgent() {{
+  const msg = $('run-msg').value.trim();
+  if (!msg) return;
+  let r;
+  try {{ r = await api('/api/run', {{ message: msg, approved: $('run-approve').checked }}); }}
+  catch (e) {{ return toast(e.message); }}
+  const icons = {{guard:'🛡',condition:'⚖',approval:'✋',tool:'🔧',planner:'🧠',responder:'✍',input:'→',output:'✓'}};
+  let html = `<div class="note"><b>user:</b> ${{r.message}}</div>`;
+  html += r.trace.map(s => `<div class="note">${{icons[s.kind]||'·'}} <b>${{s.node_id}}</b>: ${{s.detail}}</div>`).join('');
+  html += `<div style="margin-top:6px"><b>agent:</b> ${{r.reply}}</div>`;
+  const tags = [];
+  if (r.flagged_injection) tags.push(r.trace.some(s=>s.kind==='guard') ? '🛡 injection quarantined' : '⚠ injection LEAKED');
+  if (r.redacted_pii) tags.push('🔒 PII redacted');
+  if (r.approval_required) tags.push('✋ approval required');
+  if (r.blocked) tags.push('🚫 blocked');
+  (r.actions||[]).forEach(a => tags.push('🔧 ' + a));
+  if (tags.length) html += `<div class="note" style="margin-top:4px">${{tags.join(' · ')}}</div>`;
+  html += `<div class="note" style="opacity:.6">planner: ${{r.planner}}</div>`;
+  $('run-out').innerHTML = html;
+}}
+$('btn-run').addEventListener('click', runAgent);
+$('run-msg').addEventListener('keydown', e => {{ if (e.key === 'Enter') runAgent(); }});
 $('btn-import').addEventListener('click', () => $('file').click());
 $('file').addEventListener('change', async e => {{
   const file = e.target.files[0]; if (!file) return;
@@ -388,6 +429,8 @@ def make_handler(state: StudioState):
                     self._send(200, state.apply_autofix())
                 elif self.path == "/api/export":
                     self._send(200, state.export())
+                elif self.path == "/api/run":
+                    self._send(200, state.run_message(body["message"], body.get("approved", False)))
                 else:
                     self._send(404, {"error": "not found"})
             except (ValueError, KeyError, json.JSONDecodeError) as exc:

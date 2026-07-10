@@ -159,6 +159,14 @@ class ProjectStore:
         self._save(updated)
         return updated
 
+    def run_project(self, project_id: str, message: str, approved: bool = False) -> dict[str, Any]:
+        from agentproof.runtime import AgentRuntime, default_planner
+
+        record = self.get_project(project_id)
+        spec, graph, _ = self._load_objects(record)
+        runtime = AgentRuntime(graph, spec, planner=default_planner())
+        return runtime.run(message, approved_by_human=approved).to_dict()
+
     def delete_project(self, project_id: str) -> None:
         path = self._project_path(project_id)
         if path.exists():
@@ -355,6 +363,10 @@ def make_handler(store: ProjectStore):
                 if m:
                     action = getattr(store, "simulate" if m.group(2) == "simulate" else "autofix")
                     return self._send(200, action(m.group(1)))
+                m = re.match(r"^/api/projects/([^/]+)/run$", self.path)
+                if m:
+                    return self._send(200, store.run_project(
+                        m.group(1), body["message"], body.get("approved", False)))
             except (KeyError, ValueError) as exc:
                 return self._send(400, {"error": str(exc)})
             self._send(404, {"error": "not found"})
