@@ -632,7 +632,19 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(fn=cmd_studio)
 
     args = parser.parse_args(argv)
-    return args.fn(args)
+    try:
+        return args.fn(args)
+    except FileNotFoundError as exc:
+        target = getattr(args, "project", None) or exc.filename
+        print(_c(RED, f"Error: no AgentProof project at {target!r}."), file=sys.stderr)
+        print("Run `agentproof build <spec>` (or `demo -o <dir>`) first.", file=sys.stderr)
+        return 2
+    except KeyError as exc:
+        print(_c(RED, f"Error: {exc.args[0] if exc.args else exc}"), file=sys.stderr)
+        return 2
+    except (ValueError, json.JSONDecodeError) as exc:
+        print(_c(RED, f"Error: {exc}"), file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

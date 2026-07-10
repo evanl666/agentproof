@@ -199,7 +199,9 @@ class _Run:
             if fallback is not None:
                 self._visit(fallback.id)
                 self.notes.append(f"{node.id}: failure routed to fallback")
-            elif not retry:
+            elif not retry and self.spec.constraint(ConstraintKind.TOOL_FAILURE) is not None:
+                # Only a violation when the contract requires handling tool
+                # errors — consistent with how PII/injection/policy are gated.
                 self.violations.append(
                     Violation(
                         kind="unhandled_tool_error",
