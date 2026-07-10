@@ -194,4 +194,43 @@ def autofix(
         if fix:
             fixes.append(fix)
 
+    for kind in sorted(k for k in kinds if k.startswith("content_policy_")):
+        fix = _fix_content_policy(repaired, kind)
+        if fix:
+            fixes.append(fix)
+
     return AutofixReport(graph=repaired, fixes=fixes)
+
+
+def _fix_content_policy(graph: AgentGraph, violation_kind: str) -> Fix | None:
+    from agentproof.plugins import plugin_for_kind
+
+    plugin = plugin_for_kind(violation_kind[len("content_policy_"):])
+    if plugin is None:
+        return None
+    external_tools = [
+        n for n in graph.nodes if n.type == NodeType.TOOL and n.config.get("external")
+    ]
+    added: list[str] = []
+    for tool in external_tools:
+        guard_id = f"{plugin.guard_id}_{tool.id}"
+        if graph.has_node(guard_id):
+            continue
+        guard = Node(
+            id=guard_id,
+            type=NodeType.GUARD,
+            label=plugin.guard_label,
+            config={"kind": plugin.guard_kind, "plugin": plugin.kind},
+        )
+        graph.insert_before(tool.id, guard)
+        added.append(guard_id)
+    if not added:
+        return None
+    return Fix(
+        kind=violation_kind,
+        description=(
+            f"Added {plugin.guard_label} before every external channel: "
+            f"'{plugin.kind}' is now enforced before anything leaves the system"
+        ),
+        nodes_added=added,
+    )

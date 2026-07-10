@@ -272,6 +272,7 @@ class _Run:
         egress = graph.find(lambda n: n.type == NodeType.TOOL and n.config.get("external"))
         if egress is not None:
             self._walk_to(egress.id)
+            self._check_content_policies(egress)
         output = graph.find(lambda n: n.type == NodeType.OUTPUT)
         if output is not None:
             self._walk_to(output.id)
@@ -286,6 +287,30 @@ class _Run:
             cost_tokens=self.cost_tokens,
             approval_requested=self.approval_requested,
         )
+
+    def _check_content_policies(self, egress: Node) -> None:
+        """A content-policy scenario violates its plugin if its triggering
+        message reaches egress without the plugin's guard node upstream."""
+        plugin_kind = self.scenario.extra.get("plugin")
+        if not plugin_kind:
+            return
+        from agentproof.plugins import plugin_for_kind
+
+        plugin = plugin_for_kind(plugin_kind)
+        if plugin is None:
+            return
+        guarded = self.graph.upstream_has(
+            egress.id,
+            lambda n: n.type == NodeType.GUARD and n.config.get("kind") == plugin.guard_kind,
+        )
+        if not guarded:
+            self.violations.append(
+                Violation(
+                    kind=plugin.violation_kind,
+                    message=f"Content policy '{plugin.kind}' violated: response left the system without the {plugin.guard_label}",
+                    node_id=egress.id,
+                )
+            )
 
     def _attempt_refund(self, refund_tool: Node) -> None:
         scenario = self.scenario

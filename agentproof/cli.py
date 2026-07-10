@@ -36,6 +36,11 @@ from agentproof.scenarios import Scenario, generate_scenarios
 from agentproof.score import compute_score
 from agentproof.simulator import run_suite
 from agentproof.spec import BehaviorSpec, parse_spec
+from agentproof.middleware import export_middleware
+from agentproof.playground import write_playground
+from agentproof.proofs import prove, proof_summary
+from agentproof.redteam import ClaudeRedTeam, redteam_scenarios
+from agentproof.replay import traces_to_scenarios
 from agentproof.studio import DEFAULT_SPEC, serve
 from agentproof.synthesis import synthesize
 from agentproof.team import BehaviorHistory, review
@@ -495,6 +500,80 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 1 if result.blocked and args.check else 0
 
 
+def cmd_prove(args: argparse.Namespace) -> int:
+    project = Path(args.project)
+    spec, graph = _load_spec(project), _load_graph(project)
+    proofs = prove(graph, spec)
+    print(_c(BOLD, "Static reachability proofs:"))
+    failing = 0
+    for p in proofs:
+        mark = _c(GREEN, "✓ PROVEN") if p.holds else _c(RED, "✗ VIOLATED")
+        print(f"  {mark}  {p.property}")
+        print(f"        {_c(DIM, p.detail)}")
+        if not p.holds:
+            failing += 1
+            print(f"        {_c(RED, 'counterexample:')} {' → '.join(p.counterexample)}")
+    verdict = (
+        _c(GREEN, "all safety properties proven")
+        if failing == 0
+        else _c(RED, f"{failing} propert{'y' if failing == 1 else 'ies'} VIOLATED")
+    )
+    print(f"\n  {verdict}")
+    return 1 if failing and args.check else 0
+
+
+def cmd_replay(args: argparse.Namespace) -> int:
+    project = Path(args.project)
+    spec, graph = _load_spec(project), _load_graph(project)
+    scenarios = traces_to_scenarios(args.traces, spec)
+    if not scenarios:
+        print(_c(YELLOW, "No user messages found in the traces."))
+        return 0
+    results = run_suite(graph, spec, scenarios)
+    coverage = compute_coverage(graph, results)
+    score = compute_score(results, coverage)
+    print(f"{_c(BOLD, 'Production replay')} · {len(scenarios)} real messages from {args.traces}\n")
+    _print_results(results, coverage, score)
+    if args.save:
+        existing = _load_scenarios(project)
+        _save(project, scenarios=[s.to_dict() for s in existing + scenarios])
+        print(f"\n  {_c(GREEN, 'Saved')} {len(scenarios)} real-traffic scenarios into the project's suite")
+    failed = sum(1 for r in results if not r.passed)
+    return 1 if failed and args.check else 0
+
+
+def cmd_redteam(args: argparse.Namespace) -> int:
+    project = Path(args.project)
+    spec, graph = _load_spec(project), _load_graph(project)
+    using_model = args.model or ClaudeRedTeam.available()
+    print(f"{_c(BOLD, 'Red-team')} · {'model-driven (' + (args.model or 'claude-haiku-4-5') + ')' if using_model else 'offline template generator'}")
+    scenarios = redteam_scenarios(spec, n=args.n, model=args.model)
+    results = run_suite(graph, spec, scenarios)
+    _print_results(results, compute_coverage(graph, results), compute_score(results, compute_coverage(graph, results)))
+    if args.save:
+        existing = _load_scenarios(project)
+        _save(project, scenarios=[s.to_dict() for s in existing + scenarios])
+        print(f"\n  {_c(GREEN, 'Saved')} {len(scenarios)} red-team scenarios into the project's suite")
+    failed = sum(1 for r in results if not r.passed)
+    return 1 if failed and args.check else 0
+
+
+def cmd_middleware(args: argparse.Namespace) -> int:
+    project = Path(args.project)
+    spec = _load_spec(project)
+    path = export_middleware(spec, args.out)
+    print(f"Runtime guard middleware written to {_c(CYAN, str(path))}")
+    print("  Vendor it into any agent: from guards import is_injection, authorize_spend, redact_pii")
+    return 0
+
+
+def cmd_playground(args: argparse.Namespace) -> int:
+    path = write_playground(args.out)
+    print(f"Shareable playground written to {_c(CYAN, str(path))}")
+    print("  Open it in a browser or drop it in a gist — self-contained, no install.")
+    return 0
+
+
 def cmd_studio(args: argparse.Namespace) -> int:
     serve(args.dir, port=args.port, open_browser=not args.no_browser)
     return 0
@@ -660,6 +739,35 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--port", type=int, default=4600)
     p.add_argument("--no-browser", action="store_true")
     p.set_defaults(fn=cmd_serve)
+
+    p = sub.add_parser("prove", help="static reachability proofs (no path bypasses a gate)")
+    p.add_argument("project")
+    p.add_argument("--check", action="store_true", help="exit 1 if any property is violated")
+    p.set_defaults(fn=cmd_prove)
+
+    p = sub.add_parser("replay", help="replay production traces as regression scenarios")
+    p.add_argument("traces", help="traces file (JSONL / LangSmith JSON / OTel spans)")
+    p.add_argument("project")
+    p.add_argument("--save", action="store_true", help="add the real-traffic scenarios to the project")
+    p.add_argument("--check", action="store_true", help="exit 1 on failures")
+    p.set_defaults(fn=cmd_replay)
+
+    p = sub.add_parser("redteam", help="generate novel adversarial scenarios (model-driven or offline)")
+    p.add_argument("project")
+    p.add_argument("-n", type=int, default=12, help="how many attacks to generate")
+    p.add_argument("--model", help="use a real Claude model to invent attacks (e.g. claude-haiku-4-5)")
+    p.add_argument("--save", action="store_true", help="add the red-team scenarios to the project")
+    p.add_argument("--check", action="store_true", help="exit 1 on failures")
+    p.set_defaults(fn=cmd_redteam)
+
+    p = sub.add_parser("middleware", help="export runtime guard middleware to vendor into any agent")
+    p.add_argument("project")
+    p.add_argument("-o", "--out", default="guards.py")
+    p.set_defaults(fn=cmd_middleware)
+
+    p = sub.add_parser("playground", help="build a shareable self-contained HTML playground")
+    p.add_argument("-o", "--out", default="agentproof-playground.html")
+    p.set_defaults(fn=cmd_playground)
 
     p = sub.add_parser("run", help="run the verified agent live against a message (no export)")
     p.add_argument("project")

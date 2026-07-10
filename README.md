@@ -89,6 +89,79 @@ AgentProof compiles it into an agent graph **plus 50 adversarial simulation scen
 
 The agent went from *dangerous* to *shippable* — and you can watch every failing path replay on the canvas.
 
+## Prove it, don't just test it
+
+Simulation is empirical ("I attacked it 50 times, nothing leaked"). **Reachability proofs are definitive** — they check the graph structure directly and hand back a counterexample path when a property fails:
+
+```bash
+agentproof prove proj/ --check
+```
+
+```
+✓ PROVEN   every path to process_refund passes the approval gate
+✓ PROVEN   every path from lookup_customer to send_email is redacted
+✗ VIOLATED untrusted content is always quarantined before planning
+           counterexample: input → planner
+```
+
+Three properties, proven as graph invariants: money can't move without the gate, PII can't reach an external channel without redaction, injected input can't reach the planner unguarded.
+
+## Test on YOUR traffic — production replay
+
+The most convincing test is your own production data. Replay real traces (a JSONL of user messages, a LangSmith run export, or OpenTelemetry spans) — each real user turn becomes a scenario, classified by what it actually contains:
+
+```bash
+agentproof replay prod-traces.jsonl proj/ --save
+```
+
+Every real-world incident becomes a permanent regression test. And to find attacks nobody hard-coded, let a model invent them:
+
+```bash
+agentproof redteam proj/ --model claude-haiku-4-5 --save   # or offline: no --model
+```
+
+## Enforce in production — runtime guard middleware
+
+Verification proves it in CI; **middleware enforces it in production.** The same contract that generated the tests wraps your live agent and blocks the bad action before it happens:
+
+```python
+from agentproof.middleware import GuardMiddleware
+mw = GuardMiddleware.from_project("proj/")
+
+@mw.protect                       # quarantines injected input, redacts PII from replies
+def my_agent(message: str) -> str: ...
+
+if mw.authorize_spend(amount, approved_by_human).allowed: ...   # the gate, live
+safe = mw.redact_pii(payload)                                   # scrub before egress
+```
+
+Or `agentproof middleware proj/ -o guards.py` to vendor a dependency-free module into any framework. AgentProof stops being only a pre-ship gate and becomes an always-on guardrail.
+
+## Custom constraints — plugins for your domain
+
+The built-in rules cover the universal failures; plugins cover yours — *never recommend a competitor*, *always cite a source*, *never give a diagnosis*. A plugin declares the phrases that trigger it, the attacks that should be blocked, and the guard that satisfies it, then flows through the whole pipeline — parsing, scenarios, simulation, auto-fix, proofs:
+
+```python
+from agentproof import ContentPolicyPlugin, register_plugin
+register_plugin(ContentPolicyPlugin(
+    kind="no_competitor",
+    keywords=("recommend a competitor",),
+    guard_kind="competitor_filter", guard_label="Competitor mention filter",
+    triggers=("Which competitor is cheaper?",),
+    description="never recommend a competitor",
+))
+```
+
+Now a spec that says *"must never recommend a competitor"* generates competitor-baiting attacks and auto-fixes with a competitor filter.
+
+## Try it with zero install — playground
+
+```bash
+agentproof playground -o playground.html
+```
+
+A single self-contained HTML file (no CDN, no server): pick an agent from the tab bar, read its contract, watch it fail the arena and get repaired, replay any scenario on the canvas. Drop it in a gist or a PR and anyone gets it in ten seconds.
+
 ## Run it live — no export needed
 
 The point of verifying an agent is to *use* it. Once a graph is built, run it against real messages directly on the platform — the graph's guards fire live, so you iterate (edit spec → re-fix → run) in one loop instead of exporting code and booting a runtime:
@@ -238,6 +311,12 @@ agentproof/
 ├── diff.py        # behavior diff between graph versions
 ├── score.py       # reliability · safety · cost · coverage · autonomy
 ├── importers.py   # 7 frameworks: LangGraph/Claude SDK/OpenAI SDK/Copilot/n8n/Dify/Flowise
+├── proofs.py      # static reachability proofs (structural safety invariants)
+├── replay.py      # production trace replay → regression scenarios
+├── redteam.py     # model-driven adversarial generation (Haiku) + offline fallback
+├── plugins.py     # custom constraint plugins (domain content policies)
+├── middleware.py  # runtime guard middleware — enforce the contract in production
+├── playground.py  # shareable self-contained HTML gallery
 ├── runtime.py     # run a verified agent live (pluggable planner: local or real Haiku)
 ├── export/        # verified graph → LangGraph / OpenAI Agents / CrewAI / TypeScript
 ├── pricing.py     # per-model cost simulator (Fable/Opus/Sonnet/Haiku)
@@ -269,6 +348,11 @@ agentproof policy proj/ [--check]     # policy lines drawn on the graph
 agentproof cost proj/ [--model ...]   # cost projection across models
 agentproof export proj/ -t crewai -o agent/   # langgraph|openai|crewai|typescript
 agentproof run proj/ -m "..." [--model claude-haiku-4-5]  # run the agent live
+agentproof prove proj/ [--check]      # static reachability proofs
+agentproof replay traces.jsonl proj/ [--save]   # replay production traffic
+agentproof redteam proj/ [--model ...] [--save] # model/offline attack generation
+agentproof middleware proj/ -o guards.py        # export runtime guards
+agentproof playground -o playground.html        # shareable self-contained demo
 agentproof import agent.py -o proj/   # lift an existing agent (7 frameworks)
 agentproof report proj/ -o out.html   # canvas replay report
 agentproof commit proj/ -m "..."      # snapshot behavior (team mode)
@@ -338,7 +422,7 @@ tests real end-to-end behavior, not just the model in isolation.
 
 ```bash
 python -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest tests/ -v        # 136 tests, ~3s
+.venv/bin/pytest tests/ -v        # 161 tests, ~3s
 ```
 
 ## Roadmap
@@ -353,8 +437,13 @@ python -m venv .venv && .venv/bin/pip install -e ".[dev]"
 - [x] Importers for 7 frameworks: LangGraph, Claude Agent SDK, OpenAI Agents SDK, Copilot/Semantic Kernel, n8n, Dify, Flowise/OpenAI Agent Builder
 - [x] GitHub Action + Agent Score badge + `agentproof init`
 - [x] Run agents live on the platform — no code export, pluggable local/Claude planner
+- [x] Static reachability proofs (structural safety invariants + counterexamples)
+- [x] Production trace replay (JSONL / LangSmith / OpenTelemetry → regression scenarios)
+- [x] Model-driven red-team generation (+ deterministic offline fallback)
+- [x] Custom constraint plugins (domain content policies)
+- [x] Runtime guard middleware — enforce the contract in production
+- [x] Shareable zero-install playground
 - [ ] Publish to PyPI and the GitHub Marketplace
-- [ ] Production log replay: turn real traffic into regression scenarios
 
 ## License
 

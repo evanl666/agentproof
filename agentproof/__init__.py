@@ -6,7 +6,7 @@ Pipeline: Prompt -> Behavior Spec -> Tests -> Agent Graph -> Simulation
           -> Auto-fix -> Code Export -> CI
 """
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 from agentproof.spec import BehaviorSpec, Constraint, ConstraintKind, parse_spec
 from agentproof.graph import AgentGraph, Edge, Node, NodeType
@@ -38,6 +38,12 @@ from agentproof.runtime import (
     RunResult,
     default_planner,
 )
+from agentproof.proofs import Proof, all_hold, proof_summary, prove
+from agentproof.replay import extract_messages, traces_to_scenarios
+from agentproof.plugins import ContentPolicyPlugin, register_plugin, registered_plugins
+from agentproof.middleware import GuardMiddleware, export_middleware
+from agentproof.redteam import ClaudeRedTeam, TemplateRedTeam, redteam_scenarios
+from agentproof.playground import build_playground_html, write_playground
 
 __all__ = [
     "BehaviorSpec",
@@ -91,4 +97,20 @@ __all__ = [
     "ClaudePlanner",
     "RunResult",
     "default_planner",
+    "prove",
+    "Proof",
+    "all_hold",
+    "proof_summary",
+    "traces_to_scenarios",
+    "extract_messages",
+    "ContentPolicyPlugin",
+    "register_plugin",
+    "registered_plugins",
+    "GuardMiddleware",
+    "export_middleware",
+    "redteam_scenarios",
+    "ClaudeRedTeam",
+    "TemplateRedTeam",
+    "write_playground",
+    "build_playground_html",
 ]

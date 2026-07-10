@@ -100,6 +100,37 @@ def compute_policy_lines(graph: AgentGraph, spec: BehaviorSpec) -> list[PolicyLi
                 )
             )
 
+    # Custom constraint plugins: their guard must sit before every egress.
+    from agentproof.plugins import plugin_for_kind
+
+    externals = [n for n in graph.nodes if n.config.get("external")]
+    for constraint in spec.constraints:
+        if constraint.kind != ConstraintKind.CUSTOM:
+            continue
+        plugin = plugin_for_kind(constraint.params.get("plugin", ""))
+        if plugin is None:
+            continue
+        for ext in externals:
+            guarded = graph.upstream_has(
+                ext.id,
+                lambda n, gk=plugin.guard_kind: n.type == NodeType.GUARD and n.config.get("kind") == gk,
+            )
+            lines.append(
+                PolicyLine(
+                    id=f"{plugin.kind}-{ext.id}",
+                    kind=f"content_policy_{plugin.kind}",
+                    source=ext.id,
+                    target=ext.id,
+                    label=plugin.description or f"'{plugin.kind}' enforced before egress",
+                    satisfied=guarded,
+                    detail=(
+                        f"{plugin.guard_label} present on the path"
+                        if guarded
+                        else f"OPEN: '{plugin.kind}' is not enforced before this channel"
+                    ),
+                )
+            )
+
     # Prompt injection: the planner must sit behind an injection guard.
     if spec.constraint(ConstraintKind.PROMPT_INJECTION):
         planner = graph.find(lambda n: n.type == NodeType.LLM)

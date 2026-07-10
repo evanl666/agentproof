@@ -143,6 +143,17 @@ def _classify_never(line: str, index: int) -> Constraint:
             description=line,
             params=params,
         )
+    # Custom constraint plugins declare themselves via keywords in the line.
+    from agentproof.plugins import match_plugin
+
+    plugin = match_plugin(line)
+    if plugin is not None:
+        return Constraint(
+            id=f"never-{index}",
+            kind=ConstraintKind.CUSTOM,
+            description=line,
+            params={"plugin": plugin.kind},
+        )
     return Constraint(id=f"never-{index}", kind=ConstraintKind.CUSTOM, description=line)
 
 
