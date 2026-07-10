@@ -49,6 +49,13 @@ jobs:
           agentproof middleware /tmp/fintech -o /tmp/guards.py
           python -c "import sys; sys.path.insert(0,'/tmp'); import guards; assert guards.authorize_spend(5000) is False"
           agentproof playground -o /tmp/playground.html
+      - name: Infer + compile + movie (generic, any agent/API)
+        run: |
+          agentproof infer examples/existing_langgraph_agent.py -o /tmp/inferred.spec.md
+          printf '{"openapi":"3.0.0","info":{"title":"X"},"paths":{"/refunds":{"post":{"operationId":"createRefund","summary":"refund"}},"/notes":{"post":{"operationId":"addNote","summary":"note"}}}}' > /tmp/api.json
+          agentproof compile /tmp/api.json -o /tmp/safetools --name billing
+          python -m pytest /tmp/safetools/tests -q
+          agentproof movie /tmp/fintech -o /tmp/counterexample.html
 
   action:
     runs-on: ubuntu-latest

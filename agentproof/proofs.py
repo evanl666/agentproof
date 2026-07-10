@@ -88,6 +88,10 @@ def _pii_guard(n: Node) -> bool:
     return n.type == NodeType.GUARD and n.config.get("kind") == "pii_redaction"
 
 
+def _memory_guard(n: Node) -> bool:
+    return n.type == NodeType.GUARD and n.config.get("kind") == "memory_sanitizer"
+
+
 def _condition(n: Node) -> bool:
     return n.type == NodeType.CONDITION and "threshold" in n.config
 
@@ -155,6 +159,25 @@ def prove(graph: AgentGraph, spec: BehaviorSpec) -> list[Proof]:
                 holds=holds,
                 detail=("untrusted content is always quarantined before planning"
                         if holds else "injected instructions can reach the planner directly"),
+                counterexample=bypass or [],
+            ))
+
+    # 4. Untrusted input can never reach the planner without memory sanitization.
+    if spec.constraint(ConstraintKind.MEMORY_POISON) and entry_id:
+        planner = graph.find(lambda n: n.type == NodeType.LLM)
+        if planner is not None:
+            bypass = _path_avoiding(
+                graph, entry_id,
+                is_target=lambda n, pid=planner.id: n.id == pid,
+                is_barrier=_memory_guard,
+            )
+            holds = bypass is None
+            proofs.append(Proof(
+                kind="memory_guarded",
+                property=f"every path from input to {planner.id} is memory-sanitized",
+                holds=holds,
+                detail=("untrusted content is sanitized before it can be persisted"
+                        if holds else "untrusted content can be poisoned into long-term memory"),
                 counterexample=bypass or [],
             ))
 

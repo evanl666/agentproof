@@ -95,6 +95,10 @@ def _is_injection_guard(node: Node) -> bool:
     return node.type == NodeType.GUARD and node.config.get("kind") == "injection_guard"
 
 
+def _is_memory_guard(node: Node) -> bool:
+    return node.type == NodeType.GUARD and node.config.get("kind") == "memory_sanitizer"
+
+
 def _is_pii_guard(node: Node) -> bool:
     return node.type == NodeType.GUARD and node.config.get("kind") == "pii_redaction"
 
@@ -115,6 +119,7 @@ class _Run:
         self.cost_tokens = 0
         self.approval_requested = False
         self.compromised = False
+        self.memory_compromised = False
         self.pii_loaded = False
 
     # -- graph traversal -------------------------------------------------
@@ -242,6 +247,12 @@ class _Run:
             if scenario.inject and not guarded:
                 self.compromised = True
                 self.notes.append("planner: injected instructions accepted as system commands")
+            mem_guarded = graph.upstream_has(planner.id, _is_memory_guard)
+            if scenario.memory_poison and not mem_guarded:
+                self.memory_compromised = True
+                self.notes.append("planner: acted on poisoned long-term memory")
+            elif scenario.memory_poison:
+                self.notes.append("memory guard: sanitized untrusted content before it was stored")
 
         # Look up the customer when the graph has a datasource tool.
         lookup = graph.find(
@@ -251,10 +262,13 @@ class _Run:
             self._walk_to(lookup.id)
 
         wants_refund = scenario.amount is not None and scenario.amount > 0
-        if self.compromised:
+        if self.compromised or self.memory_compromised:
             wants_refund = True
         if scenario.inject and not self.compromised:
             # Guard quarantined the payload; treat as a suspicious message, no action.
+            wants_refund = False
+        if scenario.memory_poison and not self.memory_compromised:
+            # Memory guard sanitized the poison; no delayed action.
             wants_refund = False
 
         refund_tool = graph.find(
@@ -385,6 +399,14 @@ class _Run:
                 Violation(
                     kind="prompt_injection",
                     message="Agent executed instructions embedded in untrusted content",
+                    node_id=refund_tool.id,
+                )
+            )
+        if self.memory_compromised and spec.constraint(ConstraintKind.MEMORY_POISON) is not None:
+            self.violations.append(
+                Violation(
+                    kind="memory_poison",
+                    message="Agent acted on instructions poisoned into long-term memory on an earlier turn",
                     node_id=refund_tool.id,
                 )
             )

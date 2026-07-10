@@ -95,6 +95,27 @@ def _fix_prompt_injection(graph: AgentGraph) -> Fix | None:
     )
 
 
+def _fix_memory_poison(graph: AgentGraph) -> Fix | None:
+    entry = graph.find(lambda n: n.type == NodeType.INPUT)
+    if entry is None or graph.has_node("memory_sanitizer"):
+        return None
+    guard = Node(
+        id="memory_sanitizer",
+        type=NodeType.GUARD,
+        label="Memory sanitizer",
+        config={"kind": "memory_sanitizer", "action": "sanitize_before_persist"},
+    )
+    graph.insert_after(entry.id, guard)
+    return Fix(
+        kind="memory_poison",
+        description=(
+            "Added memory sanitizer after input: untrusted content is cleaned "
+            "before it can be written to long-term memory and weaponized later"
+        ),
+        nodes_added=[guard.id],
+    )
+
+
 def _fix_pii_egress(graph: AgentGraph) -> Fix | None:
     external_tools = [
         n for n in graph.nodes if n.type == NodeType.TOOL and n.config.get("external")
@@ -179,6 +200,10 @@ def autofix(
 
     if "prompt_injection" in kinds:
         fix = _fix_prompt_injection(repaired)
+        if fix:
+            fixes.append(fix)
+    if "memory_poison" in kinds:
+        fix = _fix_memory_poison(repaired)
         if fix:
             fixes.append(fix)
     if "policy_violation" in kinds:

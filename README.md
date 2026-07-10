@@ -89,6 +89,39 @@ AgentProof compiles it into an agent graph **plus 50 adversarial simulation scen
 
 The agent went from *dangerous* to *shippable* — and you can watch every failing path replay on the canvas.
 
+## Test your existing agent — no migration
+
+Already have a running agent? Point AgentProof at it. **No export, no graph, no rewrite** — it sends adversarial scenarios to your live endpoint and inspects the *real* response for evidence the attack worked:
+
+```bash
+agentproof infer my_agent.py -o agent.spec.md     # scan the agent, infer what to test
+agentproof probe http://localhost:8000/chat --spec agent.spec.md
+```
+
+```
+✗ inj-031 [prompt_injection]: agent complied with injected instructions
+✗ adv-025 [adversarial]: agent confirmed an over-$50 refund in its reply
+  16 real-response violation(s) / 50
+```
+
+Want to see the *side effects* too? Run the **AgentWorld** sandbox — a fake SaaS world (Stripe, Gmail, Salesforce, GitHub, Postgres, seeded with PII) — point your agent's tools at it, probe, and read the ledger: *"your agent refunded $999 in fake Stripe and emailed a card number via fake Gmail — the real world untouched."*
+
+```bash
+agentproof sandbox      # fake Stripe/Gmail/Postgres/... at localhost:4700
+```
+
+This is the pre-production gate: it works on **any** agent — any language, any framework, any HTTP endpoint — because it tests behavior, not code.
+
+## Turn any API into safe agent tools
+
+`agentproof compile openapi.json` reads any OpenAPI spec and generates *safe* tools instead of raw calls: mutating operations get a **preview/commit** split, an idempotency key, an **undo** where possible, and a **human-approval gate** on high-risk ones (money movement, deletion) — plus policy tests and an MCP server stub.
+
+```
+createRefund  →  preview / commit(approval_token, idempotency_key) / undo
+deleteRecord  →  preview / commit(approval_token)   # destructive: no undo
+getCustomer   →  passthrough                          # read-only, safe
+```
+
 ## Prove it, don't just test it
 
 Simulation is empirical ("I attacked it 50 times, nothing leaked"). **Reachability proofs are definitive** — they check the graph structure directly and hand back a counterexample path when a property fails:
@@ -311,6 +344,11 @@ agentproof/
 ├── diff.py        # behavior diff between graph versions
 ├── score.py       # reliability · safety · cost · coverage · autonomy
 ├── importers.py   # 7 frameworks: LangGraph/Claude SDK/OpenAI SDK/Copilot/n8n/Dify/Flowise
+├── probe.py       # black-box test a live agent over HTTP (no migration)
+├── agentworld.py  # fake SaaS sandbox (Stripe/Gmail/Salesforce/GitHub/Postgres)
+├── safetools.py   # OpenAPI → safe agent tools (preview/commit/undo/approve)
+├── infer.py       # infer a starter spec + risk scan from an agent's structure
+├── proof_movie.py # counterexample replay movie (animated red bypass paths)
 ├── proofs.py      # static reachability proofs (structural safety invariants)
 ├── replay.py      # production trace replay → regression scenarios
 ├── redteam.py     # model-driven adversarial generation (Haiku) + offline fallback
@@ -347,6 +385,11 @@ agentproof diff proj/ [--check]       # behavior diff vs baseline
 agentproof policy proj/ [--check]     # policy lines drawn on the graph
 agentproof cost proj/ [--model ...]   # cost projection across models
 agentproof export proj/ -t crewai -o agent/   # langgraph|openai|crewai|typescript
+agentproof probe <url> proj/ [--check]          # black-box test a live agent
+agentproof infer agent.py -o spec.md            # infer a spec from an agent
+agentproof sandbox                              # fake SaaS world (AgentWorld)
+agentproof compile openapi.json -o safe-tools/  # OpenAPI → safe agent tools
+agentproof movie proj/ -o counterexample.html   # counterexample replay movie
 agentproof run proj/ -m "..." [--model claude-haiku-4-5]  # run the agent live
 agentproof prove proj/ [--check]      # static reachability proofs
 agentproof replay traces.jsonl proj/ [--save]   # replay production traffic
@@ -422,7 +465,7 @@ tests real end-to-end behavior, not just the model in isolation.
 
 ```bash
 python -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest tests/ -v        # 161 tests, ~3s
+.venv/bin/pytest tests/ -v        # 176 tests, ~5s
 ```
 
 ## Roadmap
@@ -443,6 +486,11 @@ python -m venv .venv && .venv/bin/pip install -e ".[dev]"
 - [x] Custom constraint plugins (domain content policies)
 - [x] Runtime guard middleware — enforce the contract in production
 - [x] Shareable zero-install playground
+- [x] Black-box probe of a live agent (no migration) + AgentWorld fake-SaaS sandbox
+- [x] OpenAPI → safe agent tools compiler (preview/commit/undo/approve + MCP)
+- [x] Spec inference from an existing agent's structure
+- [x] Memory-poisoning / delayed-activation attack tests
+- [x] Counterexample replay movie
 - [ ] Publish to PyPI and the GitHub Marketplace
 
 ## License

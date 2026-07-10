@@ -6,7 +6,7 @@ Pipeline: Prompt -> Behavior Spec -> Tests -> Agent Graph -> Simulation
           -> Auto-fix -> Code Export -> CI
 """
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 from agentproof.spec import BehaviorSpec, Constraint, ConstraintKind, parse_spec
 from agentproof.graph import AgentGraph, Edge, Node, NodeType
@@ -44,6 +44,11 @@ from agentproof.plugins import ContentPolicyPlugin, register_plugin, registered_
 from agentproof.middleware import GuardMiddleware, export_middleware
 from agentproof.redteam import ClaudeRedTeam, TemplateRedTeam, redteam_scenarios
 from agentproof.playground import build_playground_html, write_playground
+from agentproof.probe import http_agent, probe_agent, probe_summary, detect_violations
+from agentproof.agentworld import AgentWorld, Effect
+from agentproof.infer import infer_spec, infer_from_graph, analyze_risk
+from agentproof.safetools import compile_openapi, compile_to_repo
+from agentproof.proof_movie import build_proof_movie_html, write_proof_movie
 
 __all__ = [
     "BehaviorSpec",
@@ -113,4 +118,17 @@ __all__ = [
     "TemplateRedTeam",
     "write_playground",
     "build_playground_html",
+    "probe_agent",
+    "http_agent",
+    "probe_summary",
+    "detect_violations",
+    "AgentWorld",
+    "Effect",
+    "infer_spec",
+    "infer_from_graph",
+    "analyze_risk",
+    "compile_openapi",
+    "compile_to_repo",
+    "build_proof_movie_html",
+    "write_proof_movie",
 ]

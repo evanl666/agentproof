@@ -36,9 +36,14 @@ from agentproof.scenarios import Scenario, generate_scenarios
 from agentproof.score import compute_score
 from agentproof.simulator import run_suite
 from agentproof.spec import BehaviorSpec, parse_spec
+from agentproof.agentworld import AgentWorld
+from agentproof.infer import infer_from_graph
 from agentproof.middleware import export_middleware
 from agentproof.playground import write_playground
+from agentproof.probe import http_agent, probe_agent, probe_summary
+from agentproof.proof_movie import write_proof_movie
 from agentproof.proofs import prove, proof_summary
+from agentproof.safetools import compile_to_repo
 from agentproof.redteam import ClaudeRedTeam, redteam_scenarios
 from agentproof.replay import traces_to_scenarios
 from agentproof.studio import DEFAULT_SPEC, serve
@@ -574,6 +579,71 @@ def cmd_playground(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_probe(args: argparse.Namespace) -> int:
+    """Black-box test a real, running agent over HTTP — no migration."""
+    project = Path(args.project) if args.project else None
+    if args.spec:
+        spec = parse_spec(Path(args.spec).read_text())
+        scenarios = generate_scenarios(spec, seed=args.seed, size=args.size)
+    elif project and (project / "spec.json").exists():
+        spec, scenarios = _load_spec(project), _load_scenarios(project)
+    else:
+        spec = parse_spec(DEFAULT_SPEC)
+        scenarios = generate_scenarios(spec, seed=args.seed, size=args.size)
+    caller = http_agent(args.url, field_in=args.field_in, field_out=args.field_out)
+    print(f"{_c(BOLD, 'Black-box probe')} · {len(scenarios)} adversarial scenarios → {args.url}\n")
+    results = probe_agent(caller, spec, scenarios)
+    summary = probe_summary(results)
+    for r in results:
+        if not r.passed:
+            tag = _c(RED, "✗") if r.violations else _c(YELLOW, "!")
+            detail = r.violations[0] if r.violations else (r.error or "failed")
+            print(f"  {tag} {r.scenario.id} [{r.scenario.category.value}]: {detail}")
+    verdict = (
+        _c(GREEN, f"PASSED {summary['passed']}/{summary['total']}")
+        if summary["failed"] == 0
+        else _c(RED, f"{summary['failed']} real-response violation(s) / {summary['total']}")
+    )
+    print(f"\n  {verdict}")
+    return 1 if summary["failed"] and args.check else 0
+
+
+def cmd_sandbox(args: argparse.Namespace) -> int:
+    """Run the AgentWorld fake SaaS sandbox for agents to act in safely."""
+    AgentWorld().serve(port=args.port)
+    return 0
+
+
+def cmd_compile(args: argparse.Namespace) -> int:
+    """Compile an OpenAPI spec into safe agent tools (preview/commit/undo/approve)."""
+    import json as _json
+
+    data = _json.loads(Path(args.openapi).read_text())
+    written = compile_to_repo(data, args.out, name=args.name)
+    print(f"{_c(BOLD, 'Safe tools compiled from')} {args.openapi} → {args.out}")
+    for p in written:
+        print(f"  {p}")
+    return 0
+
+
+def cmd_infer(args: argparse.Namespace) -> int:
+    """Scan an existing agent and infer a starter spec + risk report."""
+    graph = import_agent(args.agent)
+    spec, markdown, risk = infer_from_graph(graph)
+    Path(args.out).write_text(markdown)
+    print(f"{_c(BOLD, 'Inferred spec')} from {args.agent} → {_c(CYAN, args.out)}\n")
+    print(_c(DIM, markdown))
+    return 0
+
+
+def cmd_movie(args: argparse.Namespace) -> int:
+    project = Path(args.project)
+    spec, graph = _load_spec(project), _load_graph(project)
+    path = write_proof_movie(args.out, graph, spec)
+    print(f"Counterexample replay movie written to {_c(CYAN, str(path))}")
+    return 0
+
+
 def cmd_studio(args: argparse.Namespace) -> int:
     serve(args.dir, port=args.port, open_browser=not args.no_browser)
     return 0
@@ -744,6 +814,37 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("project")
     p.add_argument("--check", action="store_true", help="exit 1 if any property is violated")
     p.set_defaults(fn=cmd_prove)
+
+    p = sub.add_parser("probe", help="black-box test a real running agent over HTTP (no migration)")
+    p.add_argument("url", help="the agent's chat endpoint, e.g. http://localhost:8000/chat")
+    p.add_argument("project", nargs="?", help="project to source scenarios/spec from")
+    p.add_argument("--spec", help="behavior spec to test against (else the project's, else default)")
+    p.add_argument("--field-in", default="message", help="request JSON field for the user message")
+    p.add_argument("--field-out", help="response JSON field to read the reply from")
+    p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--size", type=int, default=50)
+    p.add_argument("--check", action="store_true", help="exit 1 on any real-response violation")
+    p.set_defaults(fn=cmd_probe)
+
+    p = sub.add_parser("sandbox", help="run the AgentWorld fake SaaS sandbox (Stripe/Gmail/Postgres/...)")
+    p.add_argument("--port", type=int, default=4700)
+    p.set_defaults(fn=cmd_sandbox)
+
+    p = sub.add_parser("compile", help="compile an OpenAPI spec into safe agent tools")
+    p.add_argument("openapi", help="OpenAPI JSON file")
+    p.add_argument("-o", "--out", default="./safe-tools")
+    p.add_argument("--name", default="safe-tools")
+    p.set_defaults(fn=cmd_compile)
+
+    p = sub.add_parser("infer", help="scan an existing agent and infer a starter spec")
+    p.add_argument("agent", help="agent file (any of the 7 supported formats)")
+    p.add_argument("-o", "--out", default="agent.spec.md")
+    p.set_defaults(fn=cmd_infer)
+
+    p = sub.add_parser("movie", help="render a counterexample replay movie of proof violations")
+    p.add_argument("project")
+    p.add_argument("-o", "--out", default="counterexample.html")
+    p.set_defaults(fn=cmd_movie)
 
     p = sub.add_parser("replay", help="replay production traces as regression scenarios")
     p.add_argument("traces", help="traces file (JSONL / LangSmith JSON / OTel spans)")

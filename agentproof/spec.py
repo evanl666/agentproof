@@ -20,6 +20,7 @@ class ConstraintKind(str, Enum):
     PII_EGRESS = "pii_egress"
     TOOL_FAILURE = "tool_failure"
     PROMPT_INJECTION = "prompt_injection"
+    MEMORY_POISON = "memory_poison"
     CUSTOM = "custom"
 
 
@@ -121,6 +122,18 @@ def _classify_never(line: str, index: int) -> Constraint:
         return Constraint(
             id=f"never-{index}",
             kind=ConstraintKind.TOOL_FAILURE,
+            description=line,
+        )
+    if (
+        "memory" in lowered
+        or "long-term" in lowered
+        or "long term" in lowered
+        or "persist" in lowered
+        or "remember" in lowered and "poison" in lowered
+    ):
+        return Constraint(
+            id=f"never-{index}",
+            kind=ConstraintKind.MEMORY_POISON,
             description=line,
         )
     if (
