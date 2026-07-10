@@ -246,6 +246,43 @@ class StudioState:
     def cost_default(self) -> dict[str, Any]:
         return self.cost()
 
+    def full_audit(self, model: str | None = None) -> dict[str, Any]:
+        """Run the entire toolkit and assemble one report with a top verdict."""
+        self._require()
+        if not self.results:
+            self.results = run_suite(self.graph, self.spec, self.scenarios)
+        coverage = compute_coverage(self.graph, self.results)
+        score = compute_score(self.results, coverage)
+        proofs = self.prove()
+        cov2 = self.risk_coverage()
+        mut = self.mutate()
+        cost = self.cost()
+        audit = self.audit(turns=4, model=model)
+        compliance = self.compliance()
+        passed = sum(1 for r in self.results if r.passed)
+        # Top-line: shippable only if score passes, every proof holds, and no
+        # attack breached the agent.
+        blocking = []
+        if not score.shippable:
+            blocking.append(f"Agent Score {score.overall} below the shippable bar")
+        if not proofs["all_hold"]:
+            blocking.append(f"{proofs['failing']} safety propert{'y' if proofs['failing']==1 else 'ies'} unproven")
+        if audit["breached"]:
+            blocking.append(f"{audit['breached']} attack campaign(s) breached the agent")
+        verdict = "SHIPPABLE" if not blocking else "NOT SHIPPABLE"
+        return {
+            "verdict": verdict,
+            "blocking": blocking,
+            "score": score.to_dict(),
+            "tests": {"passed": passed, "total": len(self.results)},
+            "proofs": proofs,
+            "coverage2": cov2,
+            "mutation": mut,
+            "cost": cost,
+            "audit": audit,
+            "compliance": compliance,
+        }
+
 
 def _studio_html() -> str:
     return f"""<!DOCTYPE html>
@@ -280,7 +317,8 @@ textarea {{ width: 100%; height: 46%; background: #0d1117; color: var(--text);
 .meter {{ height: 8px; background: var(--border); border-radius: 4px; margin: 4px 0 10px; overflow: hidden; }}
 .meter > div {{ height: 100%; }}
 .kv {{ display: flex; justify-content: space-between; font-size: 13px; padding: 3px 0; border-bottom: 1px solid #21262d; }}
-.turn {{ font-size: 12px; margin: 4px 0; padding: 6px 8px; border-radius: 6px; background: #0d1117; }}
+.turn {{ font-size: 12px; margin: 4px 0; padding: 6px 8px; border-radius: 6px; background: #0d1117; transition: opacity .35s ease; }}
+.replay {{ margin-top: 4px; }}
 .spin {{ color: var(--muted); padding: 20px; }}
 </style></head>
 <body>
@@ -297,7 +335,8 @@ textarea {{ width: 100%; height: 46%; background: #0d1117; color: var(--text);
   </div>
 </header>
 <div class="console-bar">
-  <span class="console-label">Analysis console:</span>
+  <button id="btn-fullaudit" class="cbtn" style="background:#8957e5;border-color:#a371f7;color:#fff;font-weight:600">⚡ Full audit</button>
+  <span class="console-label">or run one:</span>
   <button class="cbtn" data-act="prove">🔒 Prove</button>
   <button class="cbtn" data-act="coverage">📊 Coverage 2.0</button>
   <button class="cbtn" data-act="mutate">🧬 Mutation</button>
@@ -511,13 +550,7 @@ const RENDER = {{
       `<div class="kv"><span>${{r.display_name}}</span><b>$${{r.per_1k_requests_usd}}/1k</b></div>`).join(''),
   redteam: (d) => `<h3>Red-team ${{d.using_model?'(LLM-invented)':'(offline)'}}</h3>${{pill(d.failed===0, d.total-d.failed+'/'+d.total+' held')}}` +
     d.scenarios.map(s => `<div class="${{s.passed?'note':'violation'}}">${{s.passed?'✓':'✗'}} [${{s.category}}] ${{s.message.slice(0,80)}}</div>`).join(''),
-  audit: (d) => `<h3>🔒 ${{d.verdict}}</h3><div class="note">${{d.summary}}</div>` +
-    d.findings.sort((a,b)=>b.succeeded-a.succeeded).map(f => {{
-      let h = `<div class="${{f.succeeded?'violation':'note'}}">${{f.succeeded?'🔴 BREACHED':'🟢 held'}} [${{f.severity}}] ${{f.goal}}`;
-      if (f.succeeded) {{ h += `<br><small>fix: ${{f.suggested_fix}}</small>` +
-        f.transcript.turns.map(t => `<div class="turn">🗣 ${{t.attacker.slice(0,90)}}<br>🤖 ${{t.agent.slice(0,90)}}</div>`).join(''); }}
-      return h + '</div>';
-    }}).join(''),
+  audit: (d) => auditHtml(d),
   compliance: (d) => `<h3>Compliance — ${{d.name}}</h3>${{pill(d.score.shippable, d.score.overall+'/100')}}` +
     `<div class="kv"><span>Safety proofs</span><b>${{d.proofs.filter(p=>p.holds).length}}/${{d.proofs.length}}</b></div>` +
     '<h3>Controls</h3>' + d.controls.map(c => `<div class="kv"><span>${{c.description}}</span><b>${{c.kind}}</b></div>`).join('') +
@@ -525,8 +558,75 @@ const RENDER = {{
       '<h3>Gaps</h3>' + [...d.gaps.open_proofs, ...d.gaps.uncovered_high_risk_tools.map(t=>'untested: '+t)].map(g=>`<div class="violation">${{g}}</div>`).join('')
       : '<div class="note">No gaps — all controls tested and proven.</div>'),
 }};
+// ---- animated attack transcript ----
+let ATTACKS = {{}};  // id -> turns, for replay
+function auditHtml(d) {{
+  ATTACKS = {{}};
+  let html = `<h3>🔒 ${{d.verdict}}</h3><div class="note">${{d.summary}}</div>`;
+  d.findings.sort((a,b)=>b.succeeded-a.succeeded).forEach((f, i) => {{
+    const id = 'atk' + i;
+    html += `<div class="${{f.succeeded?'violation':'note'}}">${{f.succeeded?'🔴 BREACHED':'🟢 held'}} [${{f.severity}}] ${{f.goal}}`;
+    if (f.succeeded) {{
+      ATTACKS[id] = f.transcript.turns;
+      html += `<br><small>fix: ${{f.suggested_fix}}</small>` +
+        `<button class="cbtn" style="margin:6px 0" onclick="playAttack('${{id}}')">▶ Replay attack</button>` +
+        `<div class="replay" id="${{id}}"></div>`;
+    }}
+    html += '</div>';
+  }});
+  return html;
+}}
+function playAttack(id) {{
+  const turns = ATTACKS[id]; const box = document.getElementById(id);
+  if (!turns || !box) return;
+  box.innerHTML = ''; let i = 0;
+  function step() {{
+    if (i >= turns.length) {{
+      const b = document.createElement('div');
+      b.className = 'turn'; b.style.color = 'var(--red)'; b.innerHTML = '💥 agent breached';
+      box.appendChild(b); return;
+    }}
+    const t = turns[i++];
+    const a = document.createElement('div'); a.className = 'turn';
+    a.innerHTML = '🗣 <b>attacker:</b> ' + t.attacker;
+    a.style.opacity = 0; box.appendChild(a);
+    setTimeout(() => a.style.opacity = 1, 30);
+    setTimeout(() => {{
+      const g = document.createElement('div'); g.className = 'turn';
+      g.style.marginLeft = '14px'; g.innerHTML = '🤖 <b>agent:</b> ' + t.agent;
+      g.style.opacity = 0; box.appendChild(g);
+      setTimeout(() => g.style.opacity = 1, 30);
+      box.scrollIntoView({{behavior:'smooth', block:'end'}});
+      setTimeout(step, 900);
+    }}, 700);
+  }}
+  step();
+}}
+function fullAuditHtml(d) {{
+  const ship = d.verdict === 'SHIPPABLE';
+  let h = `<div style="text-align:center;padding:14px;border-radius:10px;margin-bottom:12px;` +
+    `background:${{ship?'rgba(63,185,80,.12)':'rgba(248,81,73,.12)'}};border:1px solid ${{ship?'var(--green)':'var(--red)'}}">` +
+    `<div style="font-size:26px;font-weight:700;color:${{ship?'var(--green)':'var(--red)'}}">${{ship?'✓ SHIPPABLE':'✗ NOT SHIPPABLE'}}</div>` +
+    `<div class="muted">Agent Score ${{d.score.overall}}/100 · ${{d.tests.passed}}/${{d.tests.total}} tests</div></div>`;
+  if (d.blocking.length) h += '<h3>Blocking issues</h3>' + d.blocking.map(b => `<div class="violation">${{b}}</div>`).join('');
+  h += `<div class="kv"><span>🔒 Safety proofs</span><b>${{d.proofs.holding}}/${{d.proofs.total}} proven</b></div>`;
+  h += `<div class="kv"><span>🤖 AI audit</span><b>${{d.audit.breached}}/${{d.audit.total}} breached</b></div>`;
+  h += `<div class="kv"><span>🧬 Mutation kill rate</span><b>${{Math.round(d.mutation.score*100)}}%</b></div>`;
+  h += `<div class="kv"><span>📊 High-risk coverage</span><b>${{Math.round(d.coverage2.high_risk_tool_coverage*100)}}%</b></div>`;
+  h += `<div class="kv"><span>💰 Cost / 1k requests</span><b>$${{d.cost.projection.per_1k_requests_usd}}</b></div>`;
+  h += '<h3>Safety proofs</h3>' + d.proofs.proofs.map(p =>
+    `<div class="${{p.holds?'note':'violation'}}">${{p.holds?'✓':'✗'}} ${{p.property}}</div>`).join('');
+  if (d.audit.breached) h += '<h3>🔴 Breaches (click to replay)</h3>' + auditHtml(d.audit).split('<h3>')[1].replace(/^[^<]*/, '');
+  return h;
+}}
 const TITLES = {{prove:'🔒 Reachability proofs', coverage:'📊 Risk coverage', mutate:'🧬 Mutation testing',
   cost:'💰 Cost', redteam:'🎯 Red-team', audit:'🤖 Autonomous audit', compliance:'📋 Compliance'}};
+$('btn-fullaudit').addEventListener('click', async () => {{
+  if (!STATE || !STATE.graph) return toast('Build an agent first');
+  openConsole('⚡ Full audit', '<div class="spin">running the full audit — proofs, coverage, mutation, cost, red-team, AI audit, compliance… (may call the model)</div>');
+  try {{ const d = await api('/api/full-audit', {{}}); openConsole('⚡ Full audit report', fullAuditHtml(d)); }}
+  catch (e) {{ openConsole('⚡ Full audit', '<div class="violation">'+e.message+'</div>'); }}
+}});
 document.querySelectorAll('.cbtn').forEach(btn => btn.addEventListener('click', async () => {{
   const act = btn.dataset.act;
   if (!STATE || !STATE.graph) return toast('Build an agent first');
@@ -602,6 +702,8 @@ def make_handler(state: StudioState):
                     self._send(200, state.audit(body.get("turns", 5), body.get("model")))
                 elif self.path == "/api/compliance":
                     self._send(200, state.compliance())
+                elif self.path == "/api/full-audit":
+                    self._send(200, state.full_audit(body.get("model")))
                 else:
                     self._send(404, {"error": "not found"})
             except (ValueError, KeyError, json.JSONDecodeError) as exc:

@@ -252,7 +252,9 @@ agentproof studio
 A local web workbench (**Python stdlib only — no npm, no build step, no cloud**) that is now a *unified console* for the entire engine:
 
 - **Build / import / simulate / auto-fix / run** — author or lift an agent, watch it get attacked and repaired on the canvas, and talk to it live.
-- **Analysis console** — one row of buttons runs the whole toolkit into a slide-out panel: 🔒 reachability **proofs**, 📊 risk **coverage 2.0**, 🧬 **mutation** testing, 💰 **cost** projection, 🎯 LLM **red-team**, 🤖 the autonomous **AI audit** (with the breaking conversation), and a 📋 **compliance** report.
+- **⚡ Full audit** — one button runs *everything* (proofs, coverage, mutation, cost, red-team, AI audit, compliance) and returns a single SHIPPABLE / NOT-SHIPPABLE verdict with the blocking issues.
+- **Analysis console** — or run one capability at a time into a slide-out panel: 🔒 reachability **proofs**, 📊 risk **coverage 2.0**, 🧬 **mutation** testing, 💰 **cost** projection, 🎯 LLM **red-team**, 🤖 the autonomous **AI audit**, and a 📋 **compliance** report.
+- **Animated attack replay** — a breached AI-audit finding plays back turn by turn: watch the attacker's messages and your agent's replies unfold like a live conversation, ending in 💥 breach.
 
 
 ## Import agents you already have
@@ -514,7 +516,7 @@ tests real end-to-end behavior, not just the model in isolation.
 
 ```bash
 python -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest tests/ -v        # 232 tests, ~5s
+.venv/bin/pytest tests/ -v        # 233 tests, ~5s
 ```
 
 ## Roadmap

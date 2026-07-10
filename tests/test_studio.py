@@ -116,3 +116,23 @@ def test_console_requires_build(tmp_path):
     state = StudioState(tmp_path)
     with pytest.raises(ValueError):
         state.prove()
+
+
+def test_full_audit_shippable_vs_naive(tmp_path):
+    state = StudioState(tmp_path)
+    state.build(DEFAULT_SPEC)
+    state.simulate()
+    naive = state.full_audit()
+    assert naive["verdict"] == "NOT SHIPPABLE"
+    assert naive["blocking"]  # score / proofs / audit reasons
+    assert naive["audit"]["breached"] > 0
+
+    state.apply_autofix()
+    fixed = state.full_audit()
+    assert fixed["verdict"] == "SHIPPABLE"
+    assert not fixed["blocking"]
+    assert fixed["proofs"]["all_hold"]
+    assert fixed["audit"]["breached"] == 0
+    # the combined report carries every section
+    for k in ("score", "proofs", "coverage2", "mutation", "cost", "audit", "compliance"):
+        assert k in fixed
