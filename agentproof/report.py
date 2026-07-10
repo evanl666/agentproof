@@ -77,20 +77,24 @@ function layoutGraph(graph) {
   graph.nodes.forEach(n => { if (depth[n.id] === undefined) depth[n.id] = 1; });
   const cols = {};
   graph.nodes.forEach(n => { (cols[depth[n.id]] = cols[depth[n.id]] || []).push(n); });
-  const pos = {}; const W = 150, H = 46, GX = 210, GY = 84;
+  const pos = {}; const W = 168, H = 48, GX = 250, GY = 92;
   Object.keys(cols).sort((a, b) => a - b).forEach(d => {
     cols[d].forEach((n, i) => {
-      pos[n.id] = { x: 30 + d * GX, y: 30 + i * GY + (d % 2) * 20, w: W, h: H };
+      pos[n.id] = { x: 30 + d * GX, y: 30 + i * GY + (d % 2) * 16, w: W, h: H };
     });
   });
   return pos;
 }
 
-function edgePath(a, b) {
+function edgePath(a, b, bend) {
+  bend = bend || 0;
   const x1 = a.x + a.w, y1 = a.y + a.h / 2, x2 = b.x, y2 = b.y + b.h / 2;
   if (x2 <= x1) {
-    const midY = Math.max(y1, y2) + 52;
-    return `M ${a.x + a.w/2} ${a.y + a.h} C ${a.x + a.w/2} ${midY}, ${b.x + b.w/2} ${midY}, ${b.x + b.w/2} ${b.y + b.h}`;
+    // Back/return edge: bow downward, below the nodes, fanned by `bend` so the
+    // many tool->planner returns don't pile into one thick bundle.
+    const sx = a.x + a.w / 2, tx = b.x + b.w / 2;
+    const midY = Math.max(a.y + a.h, b.y + b.h) + 34 + bend;
+    return `M ${sx} ${a.y + a.h} C ${sx} ${midY}, ${tx} ${midY}, ${tx} ${b.y + b.h}`;
   }
   const mx = (x1 + x2) / 2;
   return `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`;
@@ -136,23 +140,42 @@ function renderGraph(svg, graph, onNodeClick) {
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#3fb950"/></marker>
   </defs>`;
   const ns = 'http://www.w3.org/2000/svg';
-  graph.edges.forEach((e, i) => {
+  // "tool call" / "result" repeat on every agent-loop edge — pure noise; hide them.
+  const NOISE_LABELS = { 'tool call': 1, 'result': 1, '': 1 };
+  const backSeen = {};  // fan parallel return edges apart per target
+  graph.edges.forEach((e) => {
     const a = pos[e.source], b = pos[e.target];
     if (!a || !b) return;
+    const isNoise = !!NOISE_LABELS[e.label];
+    const isBack = b.x <= a.x;
+    // Only the unlabeled agent-loop returns recede; a labelled back-edge
+    // (rejected / on error) stays solid so its meaning is visible.
+    const fade = isBack && isNoise;
+    let bend = 0;
+    if (fade) { bend = (backSeen[e.target] || 0) * 16; backSeen[e.target] = (backSeen[e.target] || 0) + 1; }
     const path = document.createElementNS(ns, 'path');
-    path.setAttribute('d', edgePath(a, b));
+    path.setAttribute('d', edgePath(a, b, bend));
     path.setAttribute('fill', 'none');
-    path.setAttribute('stroke', '#30363d');
-    path.setAttribute('stroke-width', '1.5');
-    path.setAttribute('marker-end', 'url(#arrow)');
     path.dataset.edge = e.source + '->' + e.target;
+    path.dataset.bend = bend;
+    if (fade) {
+      path.setAttribute('stroke', '#3a4150');
+      path.setAttribute('stroke-width', '1');
+      path.setAttribute('stroke-opacity', '0.35');
+      path.setAttribute('stroke-dasharray', '3 4');
+      path.dataset.back = '1';
+    } else {
+      path.setAttribute('stroke', '#4a5160');
+      path.setAttribute('stroke-width', '1.5');
+      path.setAttribute('marker-end', 'url(#arrow)');
+    }
     svg.appendChild(path);
-    if (e.label) {
+    if (!isNoise) {  // draw meaningful labels in any direction
       const t = document.createElementNS(ns, 'text');
       const x1 = a.x + a.w, x2 = b.x;
       t.setAttribute('x', (x1 + x2) / 2 - 20);
       t.setAttribute('y', (a.y + b.y + a.h) / 2 - 6);
-      t.textContent = e.label; t.setAttribute('opacity', '0.7');
+      t.textContent = e.label; t.setAttribute('opacity', '0.65');
       svg.appendChild(t);
     }
   });
@@ -168,7 +191,7 @@ function renderGraph(svg, graph, onNodeClick) {
     ts[1].setAttribute('x', p.x + 10); ts[1].setAttribute('y', p.y + 35);
     svg.querySelectorAll('path[data-edge]').forEach(path => {
       const [s, t] = path.dataset.edge.split('->');
-      if (s === id || t === id) path.setAttribute('d', edgePath(pos[s], pos[t]));
+      if (s === id || t === id) path.setAttribute('d', edgePath(pos[s], pos[t], +path.dataset.bend || 0));
     });
   }
   function svgPoint(evt) {
@@ -215,12 +238,19 @@ function renderGraph(svg, graph, onNodeClick) {
   });
 }
 
-function highlightResult(svg, result) {
+function resetEdges(svg) {
   svg.querySelectorAll('path[data-edge]').forEach(p => {
-    p.setAttribute('stroke', '#30363d');
-    p.setAttribute('stroke-width', '1.5');
-    p.setAttribute('marker-end', 'url(#arrow)');
+    if (p.dataset.back) {  // keep faded return edges receded
+      p.setAttribute('stroke', '#3a4150'); p.setAttribute('stroke-width', '1');
+      p.setAttribute('stroke-opacity', '0.35'); p.removeAttribute('marker-end');
+    } else {
+      p.setAttribute('stroke', '#4a5160'); p.setAttribute('stroke-width', '1.5');
+      p.setAttribute('stroke-opacity', '1'); p.setAttribute('marker-end', 'url(#arrow)');
+    }
   });
+}
+function highlightResult(svg, result) {
+  resetEdges(svg);
   svg.querySelectorAll('.node rect').forEach(r => r.setAttribute('fill', '#161b22'));
   if (!result) return;
   const color = result.passed ? '#3fb950' : '#f85149';

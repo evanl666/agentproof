@@ -1133,10 +1133,7 @@ const STEP_ICONS = {{guard:'🛡',condition:'⚖',approval:'✋',tool:'🔧',pla
 // communication is visible on the canvas, one hop at a time.
 async function animateFlow(trace) {{
   if (!STATE || !STATE.graph || !trace || !trace.length) return;
-  svg.querySelectorAll('path[data-edge]').forEach(p => {{
-    p.setAttribute('stroke', '#30363d'); p.setAttribute('stroke-width', '1.5');
-    p.setAttribute('marker-end', 'url(#arrow)');
-  }});
+  if (typeof resetEdges === 'function') resetEdges(svg);
   svg.querySelectorAll('.node rect').forEach(r => r.setAttribute('fill', '#161b22'));
   const ids = trace.map(s => s.node_id).filter(Boolean);
   const violated = false;
