@@ -253,6 +253,61 @@ class StudioState:
                     lines.append(f"- {never_phrase.get(c.kind.value, c.description.lower())}")
         return "\n".join(lines).strip() + "\n"
 
+    def refine(self, instruction: str) -> dict[str, Any]:
+        """Change the agent by describing the change in plain language, then rebuild.
+
+        With a model key the LLM rewrites the whole spec incorporating the request;
+        offline it appends the request as a capability so it still does something."""
+        if not self.spec:
+            raise ValueError("Build an agent first")
+        instruction = (instruction or "").strip()
+        if not instruction:
+            raise ValueError("Say what to change")
+        self.spec_text = self._refine_spec_text(self.spec_text, instruction)
+        return self.build(self.spec_text)
+
+    @staticmethod
+    def _refine_spec_text(current: str, instruction: str) -> str:
+        from agentproof.intelligence import use_llm
+
+        if use_llm():
+            try:
+                import anthropic
+
+                system = (
+                    "You edit an AI agent's behavior spec. Given the current spec and a "
+                    "change request, return the FULL updated spec in the same markdown "
+                    "format: a '# Name' heading, a 'The agent should:' section with '- ' "
+                    "bullets, and a 'The agent must never:' section with '- ' bullets. "
+                    "Apply the change faithfully and keep everything else. Output ONLY the spec."
+                )
+                resp = anthropic.Anthropic().messages.create(
+                    model="claude-haiku-4-5", max_tokens=1200, system=system,
+                    messages=[{"role": "user",
+                               "content": f"Current spec:\n{current}\n\nChange request:\n{instruction}"}],
+                )
+                text = next((b.text for b in resp.content if b.type == "text"), "").strip()
+                if text and ("should" in text.lower() or text.lstrip().startswith("#")):
+                    return text
+            except Exception:  # noqa: BLE001 — fall back to the deterministic edit
+                pass
+        # Offline: fold the instruction in as a capability bullet under "should".
+        lines = current.rstrip().splitlines()
+        insert_at = None
+        for i, ln in enumerate(lines):
+            if ln.strip().lower().startswith("the agent should"):
+                j = i + 1
+                while j < len(lines) and lines[j].strip().startswith("-"):
+                    j += 1
+                insert_at = j
+                break
+        bullet = f"- {instruction}"
+        if insert_at is not None:
+            lines.insert(insert_at, bullet)
+        else:
+            lines += ["", "The agent should:", bullet]
+        return "\n".join(lines) + "\n"
+
     @staticmethod
     def _parse(spec_text: str):
         from agentproof.intelligence import use_llm
@@ -649,9 +704,41 @@ def _studio_html() -> str:
   --shadow-lg: 0 10px 34px rgba(0,0,0,.16);
 }}
 body {{ background: var(--bg); color: var(--text);
-  font: 13px/1.5 "Inter", -apple-system, "Segoe UI", sans-serif; }}
+  font: 13px/1.5 "Inter", -apple-system, "Segoe UI", sans-serif;
+  display: flex; flex-direction: column; height: 100vh; overflow: hidden; }}
 svg text {{ fill: var(--text); }}
 .muted, .note {{ color: var(--muted); }}
+
+/* Guided progress spine */
+.stepper {{ display: flex; align-items: center; gap: 12px; padding: 8px 16px;
+  background: var(--panel); border-bottom: 1px solid var(--border); }}
+.steps {{ display: flex; gap: 4px; align-items: center; }}
+.step {{ display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted);
+  padding: 4px 12px; border-radius: 20px; font-weight: 500; }}
+.step .dot {{ width: 18px; height: 18px; border-radius: 50%; background: #dcdfe4; color: #fff;
+  display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; }}
+.step.active {{ color: var(--text); background: rgba(13,153,255,.10); }}
+.step.active .dot {{ background: var(--blue); }}
+.step.done {{ color: var(--text); }} .step.done .dot {{ background: var(--green); }}
+.step.issues {{ color: var(--text); background: rgba(207,138,0,.12); }}
+.step.issues .dot {{ background: var(--amber); }}
+.step-arrow {{ color: #cfd2d6; font-size: 12px; }}
+#next-cta {{ margin-left: auto; }}
+body.ide-mode .stepper, body.ide-mode #issues {{ display: none; }}
+
+/* Issue / fix hero */
+#issues:empty {{ display: none; }}
+.hero {{ margin: 12px 14px 0; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--border); }}
+.hero.warn {{ background: rgba(207,138,0,.08); border-color: rgba(207,138,0,.30); }}
+.hero.good {{ background: rgba(20,174,92,.08); border-color: rgba(20,174,92,.30); }}
+.hero-h {{ font-weight: 600; font-size: 13px; margin-bottom: 8px; }}
+.hero.warn .hero-h {{ color: var(--amber); }} .hero.good .hero-h {{ color: var(--green); }}
+.hero-item {{ font-size: 12px; color: var(--text); margin: 3px 0; }}
+
+/* Refine bar */
+.refine-bar {{ display: flex; gap: 6px; padding: 8px 14px; border-bottom: 1px solid var(--border); }}
+.refine-bar input {{ flex: 1; font-size: 12px; }}
+.refine-bar button {{ padding: 6px 11px; }}
 
 /* Top bar */
 header {{ display: flex; align-items: center; gap: 14px; height: 48px; padding: 0 14px;
@@ -708,7 +795,7 @@ button.primary:hover {{ background: #0a86e0; border-color: #0a86e0; }}
 
 /* Layout: white side panels flanking a light-gray canvas (Figma) */
 .layout {{ display: grid; grid-template-columns: 288px 1fr 312px; gap: 0; padding: 0;
-  height: calc(100vh - 49px); }}
+  flex: 1; min-height: 0; }}
 .panel {{ background: var(--panel); border: none; border-radius: 0; overflow-y: auto; }}
 .layout > .panel:first-child {{ border-right: 1px solid var(--border); }}
 .layout > .panel:last-child {{ border-left: 1px solid var(--border); }}
@@ -841,6 +928,7 @@ input:focus, textarea:focus, select:focus {{ border-color: var(--blue) !importan
   </div>
   <span class="chip" id="verdict"><b>—</b></span>
   <div class="toolbar">
+    <button id="mode-toggle" class="ghost" title="Toggle guided / full IDE view">Guided</button>
     <button id="btn-import" class="ghost">Import…</button>
     <button id="btn-board" class="ghost" title="Multi-agent dashboard">▦ Board</button>
     <div class="menu">
@@ -894,6 +982,18 @@ input:focus, textarea:focus, select:focus {{ border-color: var(--blue) !importan
     </div>
   </div>
 </header>
+<div class="stepper" id="stepper">
+  <div class="steps">
+    <div class="step" data-step="describe"><span class="dot">1</span> Describe</div>
+    <span class="step-arrow">→</span>
+    <div class="step" data-step="verify"><span class="dot">2</span> Verify</div>
+    <span class="step-arrow">→</span>
+    <div class="step" data-step="connect"><span class="dot">3</span> Connect</div>
+    <span class="step-arrow">→</span>
+    <div class="step" data-step="ship"><span class="dot">4</span> Ship</div>
+  </div>
+  <button id="next-cta" class="primary">✨ Describe your agent</button>
+</div>
 <div class="layout">
   <div class="panel" style="display:flex;flex-direction:column">
     <h2>Behavior spec
@@ -914,6 +1014,10 @@ input:focus, textarea:focus, select:focus {{ border-color: var(--blue) !importan
       <button id="btn-build-visual" class="primary" style="margin-top:10px;width:100%">Build this agent →</button>
     </div>
     <textarea id="spec" style="display:none"></textarea>
+    <div class="refine-bar">
+      <input id="refine-msg" placeholder="✨ Change it in words… e.g. add order cancellation">
+      <button id="btn-refine" class="ghost" title="Refine with AI">→</button>
+    </div>
     <h2>Simulation arena</h2>
     <div id="scenarios" style="flex:1;overflow-y:auto"></div>
   </div>
@@ -922,6 +1026,7 @@ input:focus, textarea:focus, select:focus {{ border-color: var(--blue) !importan
     <svg id="graph"></svg>
   </div>
   <div class="panel">
+    <div id="issues"></div>
     <h2>🔧 Tools <button id="btn-addtool" class="ghost mini" style="float:right">＋ Add</button></h2>
     <div class="detail" id="tools"><p class="muted">Build an agent to edit its tools.</p></div>
     <h2>Agent score</h2><div class="scorebar" id="score"></div>
@@ -1040,6 +1145,7 @@ function render() {{
   if (STATE.graph) renderGraph(svg, STATE.graph, showNode);
   renderTools();
   if (typeof renderSpecForm === 'function' && specMode === 'visual') renderSpecForm();
+  if (typeof renderStepper === 'function') {{ renderStepper(); renderIssues(); }}
   const list = $('scenarios'); list.innerHTML = '';
   const results = STATE.results || [];
   const byId = {{}};
@@ -1663,7 +1769,88 @@ $('cr-generate').addEventListener('click', async () => {{
   finally {{ $('cr-generate').textContent = '✨ Generate agent →'; $('cr-generate').disabled = false; }}
 }});
 
-api('/api/state').then(s => {{ STATE = s; render(); }});
+// ---- guided progress spine + issue/fix hero + conversational refine ----
+function boundCount() {{
+  if (!STATE || !STATE.graph) return 0;
+  return STATE.graph.nodes.filter(n => n.type === 'tool' && n.config && n.config.binding).length;
+}}
+function agentState() {{
+  if (!STATE || !STATE.graph) return 'describe';
+  const results = STATE.results || [];
+  if (!results.length) return 'built';
+  return results.some(r => !r.passed) ? 'issues' : 'verified';
+}}
+function renderStepper() {{
+  const s = agentState();
+  const set = (id, cls) => {{ const el = document.querySelector('.step[data-step="'+id+'"]'); if (el) el.className = 'step' + (cls ? ' ' + cls : ''); }};
+  const cta = $('next-cta');
+  if (s === 'describe') {{
+    set('describe','active'); set('verify'); set('connect'); set('ship');
+    cta.textContent = '✨ Describe your agent'; cta.onclick = openCreate;
+  }} else {{
+    set('describe','done');
+    if (s === 'built') {{
+      set('verify','active'); set('connect'); set('ship');
+      cta.textContent = '▶ Run the simulation'; cta.onclick = () => $('btn-simulate').click();
+    }} else if (s === 'issues') {{
+      set('verify','issues'); set('connect'); set('ship');
+      const f = (STATE.results||[]).filter(r => !r.passed).length;
+      cta.textContent = '🛠 Auto-fix ' + f + ' issue' + (f>1?'s':''); cta.onclick = () => $('btn-autofix').click();
+    }} else {{
+      set('verify','done');
+      set('connect', boundCount() > 0 ? 'done' : 'active');
+      set('ship','active');
+      cta.textContent = boundCount() > 0 ? '🚀 Ship it' : '🔌 Connect tools'; cta.onclick = boundCount() > 0 ? () => $('ship-toggle').click() : openConnect;
+    }}
+  }}
+}}
+const ISSUE_TEXT = {{
+  policy_violation: 'Money can move over the limit without approval',
+  pii_egress: 'Customer PII can leak to an external channel',
+  sensitive_egress: 'Secrets or source code can leak externally',
+  prompt_injection: 'The agent follows instructions injected into content',
+  memory_poison: 'The agent acts on poisoned memory',
+  unhandled_tool_error: 'A tool failure is not handled gracefully',
+  high_risk_action: 'A high-risk action runs without approval',
+}};
+function renderIssues() {{
+  const box = $('issues'); if (!box) return;
+  if (!STATE) {{ box.innerHTML = ''; return; }}
+  const failed = (STATE.results || []).filter(r => !r.passed);
+  if (failed.length) {{
+    const kinds = {{}};
+    failed.forEach(r => (r.violations||[]).forEach(v => {{ kinds[v.kind] = (kinds[v.kind]||0) + 1; }}));
+    let html = '<div class="hero warn"><div class="hero-h">⚠️ ' + failed.length + ' safety issue' + (failed.length>1?'s':'') + ' found</div>';
+    Object.keys(kinds).forEach(k => {{ html += '<div class="hero-item">• ' + (ISSUE_TEXT[k]||k) + ' <span class="muted">(' + kinds[k] + ')</span></div>'; }});
+    html += '<button class="primary" id="hero-fix" style="margin-top:10px;width:100%">🛠 Auto-fix all</button></div>';
+    box.innerHTML = html;
+    $('hero-fix').onclick = () => $('btn-autofix').click();
+  }} else if ((STATE.fixes || []).length) {{
+    let html = '<div class="hero good"><div class="hero-h">✓ Shippable — ' + STATE.fixes.length + ' fix' + (STATE.fixes.length>1?'es':'') + ' applied</div>';
+    STATE.fixes.forEach(f => {{ html += '<div class="hero-item">+ ' + f.description + '</div>'; }});
+    box.innerHTML = html + '</div>';
+  }} else {{ box.innerHTML = ''; }}
+}}
+async function doRefine() {{
+  const t = $('refine-msg').value.trim();
+  if (!t) return;
+  if (!STATE || !STATE.graph) return toast('Build an agent first');
+  $('refine-msg').value = ''; toast('Refining…');
+  try {{
+    STATE = await api('/api/refine', {{instruction: t}});
+    STATE = await api('/api/simulate');
+    STATE.diff = null; if (specMode === 'text') $('spec').value = STATE.spec_text;
+    render(); toast('Updated — re-verified');
+  }} catch (e) {{ toast(e.message); }}
+}}
+$('btn-refine').addEventListener('click', doRefine);
+$('refine-msg').addEventListener('keydown', e => {{ if (e.key === 'Enter') doRefine(); }});
+$('mode-toggle').addEventListener('click', () => {{
+  document.body.classList.toggle('ide-mode');
+  $('mode-toggle').textContent = document.body.classList.contains('ide-mode') ? 'IDE' : 'Guided';
+}});
+
+api('/api/state').then(s => {{ STATE = s; render(); if (!STATE.graph) openCreate(); }});
 loadProjects();
 </script>
 </body></html>"""
@@ -1833,6 +2020,8 @@ def make_handler(workspace: Workspace):
                     result = st.build(body["spec_text"])
                 elif self.path == "/api/build-structured":
                     result = st.build_structured(body)
+                elif self.path == "/api/refine":
+                    result = st.refine(body.get("instruction", ""))
                 elif self.path == "/api/import":
                     result = st.import_agent(
                         body["content"], body.get("filename", "agent.json"), body.get("spec_text")

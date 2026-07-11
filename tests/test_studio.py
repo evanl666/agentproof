@@ -303,3 +303,23 @@ def test_studio_js_has_no_syntax_errors():
     for i, script in enumerate(re.findall(r"<script>(.*?)</script>", html, re.S)):
         r = subprocess.run([node, "--check", "-"], input=script, text=True, capture_output=True)
         assert r.returncode == 0, f"script block {i} has a JS syntax error:\n{r.stderr}"
+
+
+def test_refine_folds_change_into_spec(tmp_path, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)  # deterministic path
+    state = StudioState(tmp_path)
+    state.build(DEFAULT_SPEC)
+    n_caps = len(state.spec.capabilities)
+    state.refine("also let it cancel an order")
+    assert "cancel an order" in state.spec_text.lower()
+    assert len(state.spec.capabilities) == n_caps + 1  # new capability added
+    assert state.graph  # rebuilt
+
+
+def test_refine_requires_agent_and_text(tmp_path):
+    state = StudioState(tmp_path)
+    with pytest.raises(ValueError):
+        state.refine("do something")  # no agent yet
+    state.build(DEFAULT_SPEC)
+    with pytest.raises(ValueError):
+        state.refine("   ")  # empty instruction
