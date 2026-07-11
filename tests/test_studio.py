@@ -284,3 +284,22 @@ def test_full_audit_shippable_vs_naive(tmp_path):
     # the combined report carries every section
     for k in ("score", "proofs", "coverage2", "mutation", "cost", "audit", "compliance"):
         assert k in fixed
+
+
+def test_studio_js_has_no_syntax_errors():
+    """The whole page dies if any <script> has a syntax error (e.g. an f-string
+    turning \\n into a real newline inside a JS regex). Lint every block with node
+    when it's available so an all-buttons-dead regression can't slip through."""
+    import re
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if not node:
+        import pytest as _pytest
+        _pytest.skip("node not available to lint the studio JS")
+    from agentproof.studio import _studio_html
+    html = _studio_html()
+    for i, script in enumerate(re.findall(r"<script>(.*?)</script>", html, re.S)):
+        r = subprocess.run([node, "--check", "-"], input=script, text=True, capture_output=True)
+        assert r.returncode == 0, f"script block {i} has a JS syntax error:\n{r.stderr}"

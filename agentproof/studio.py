@@ -1646,7 +1646,7 @@ $('cr-import').addEventListener('click', () => {{ $('create').classList.remove('
 $('cr-generate').addEventListener('click', async () => {{
   const desc = $('cr-desc').value.trim();
   if (!desc) return toast('Describe your agent first (or pick a template)');
-  const name = desc.split(/[.\n]/)[0].split(' ').slice(0, 5).join(' ') || 'New agent';
+  const name = desc.split(/[.\\n]/)[0].split(' ').slice(0, 5).join(' ') || 'New agent';
   $('cr-generate').textContent = '✨ Generating…'; $('cr-generate').disabled = true;
   try {{
     PROJECTS = await api('/api/projects/new', {{name}});
