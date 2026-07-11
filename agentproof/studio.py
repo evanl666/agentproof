@@ -158,6 +158,8 @@ class StudioState:
         When a model key is present this is fully LLM-native: the model reads the
         prose, infers the capabilities/risks, and designs the tool graph. Offline
         it falls back to the deterministic compiler so CI stays reproducible."""
+        if not isinstance(spec_text, str):
+            raise ValueError("spec_text must be a string")
         self.spec_text = spec_text
         self.spec = self._parse(spec_text)
         self.graph = self._synthesize(self.spec)
@@ -185,14 +187,21 @@ class StudioState:
         `data`: {name, capabilities: [str|{description}], guardrails: {kind: bool},
         spend_threshold: number}. We construct the BehaviorSpec ourselves, keep the
         text view in sync by rendering readable prose, then synthesize + verify."""
-        name = (data.get("name") or "Agent").strip()
+        if not isinstance(data, dict):
+            raise ValueError("expected an object with name/capabilities/guardrails")
+        name = str(data.get("name") or "Agent").strip()
         caps = []
-        for i, c in enumerate(data.get("capabilities") or []):
+        caps_in = data.get("capabilities") or []
+        if not isinstance(caps_in, list):
+            raise ValueError("capabilities must be a list")
+        for i, c in enumerate(caps_in):
             desc = c.get("description") if isinstance(c, dict) else str(c)
             desc = (desc or "").strip()
             if desc:
                 caps.append(Capability(id=f"cap-{i}", description=desc))
         guards = data.get("guardrails") or {}
+        if not isinstance(guards, dict):
+            raise ValueError("guardrails must be an object of {kind: bool}")
         threshold = coerce_threshold(data.get("spend_threshold"))
         constraints: list[Constraint] = []
         for kind, enabled in guards.items():
@@ -312,11 +321,18 @@ class StudioState:
         snapshot["diff"] = diff.to_dict()
         return snapshot
 
+    @staticmethod
+    def _safe_name(value: str, default: str) -> str:
+        """A filesystem-safe slug — blocks path traversal in export/deploy targets."""
+        slug = "".join(c if (c.isalnum() or c in "-_") else "-" for c in str(value)).strip("-")
+        return slug or default
+
     def export(self, framework: str = "langgraph") -> dict[str, Any]:
         if not (self.spec and self.graph):
             raise ValueError("Build or import an agent first")
         from agentproof.export import export_agent
 
+        framework = self._safe_name(framework, "langgraph")
         out_dir = self.project_dir / "export" / framework
         written = export_agent(framework, self.spec, self.graph, self.scenarios, out_dir)
         return {
@@ -402,11 +418,15 @@ class StudioState:
         """Attach several tools at once (e.g. a whole MCP server's toolset)."""
         if not self.graph:
             raise ValueError("Build or import an agent first")
+        if not isinstance(tools, list):
+            raise ValueError("tools must be a list")
         planner = self._planner_id()
         if not planner:
             raise ValueError("This graph has no planner to attach a tool to")
         added = []
-        for t in tools or []:
+        for t in tools:
+            if not isinstance(t, dict):
+                continue
             label = (t.get("label") or "").strip()
             if label:
                 added.append(self._attach_tool(label, t.get("risk"), planner))
@@ -1538,7 +1558,7 @@ def make_handler(workspace: Workspace):
                 if self.path == "/api/projects/delete":
                     self._send(200, workspace.delete(body["id"]))
                     return
-            except (ValueError, KeyError) as exc:
+            except (ValueError, KeyError, TypeError, AttributeError) as exc:
                 self._send(400, {"error": str(exc)})
                 return
             st = state()
@@ -1588,8 +1608,13 @@ def make_handler(workspace: Workspace):
                 else:
                     self._send(404, {"error": "not found"})
                     return
-            except (ValueError, KeyError, json.JSONDecodeError) as exc:
+            except (ValueError, KeyError, TypeError, AttributeError, json.JSONDecodeError) as exc:
+                # Bad/malformed input — report it, never drop the connection.
                 self._send(400, {"error": str(exc)})
+                return
+            except Exception as exc:  # noqa: BLE001 — last-resort guard so a bug
+                # in one endpoint can't take down the request thread silently.
+                self._send(500, {"error": f"internal error: {type(exc).__name__}: {exc}"})
                 return
             # Persist the mutated active project into the shared team store.
             workspace.persist_active()

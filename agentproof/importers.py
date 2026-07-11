@@ -197,7 +197,10 @@ def import_python_agent(source: str, name: str = "Imported agent") -> AgentGraph
     input -> planner (LLM) -> tools -> responder -> egress -> output. That graph
     then simulates, auto-fixes, and re-exports like any other.
     """
-    tree = ast.parse(source)
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as exc:
+        raise ValueError(f"Could not parse Python source: {exc.msg} (line {exc.lineno})") from exc
     tool_names: list[str] = []
 
     def _add(name: str) -> None:
@@ -273,14 +276,14 @@ def import_python_agent(source: str, name: str = "Imported agent") -> AgentGraph
 def import_flowise(data: dict[str, Any], name: str | None = None) -> AgentGraph:
     """Import a Flowise chatflow JSON export ({"nodes": [...], "edges": [...]})."""
     graph = AgentGraph(name=name or data.get("name", "Imported Flowise agent"))
-    for raw in data.get("nodes", []):
+    for raw in (data.get("nodes") or []):
         node_id = raw.get("id") or raw.get("name")
         node_data = raw.get("data", {})
         label = node_data.get("label") or raw.get("label") or node_id
         hint = f"{node_data.get('name', '')} {node_data.get('category', '')} {label}"
         node_type, config = _infer_node_type(str(node_id), hint)
         graph.add_node(Node(id=str(node_id), type=node_type, label=str(label), config=config))
-    for raw in data.get("edges", []):
+    for raw in (data.get("edges") or []):
         source = raw.get("source") or raw.get("sourceNode")
         target = raw.get("target") or raw.get("targetNode")
         if source and target and graph.has_node(str(source)) and graph.has_node(str(target)):
@@ -334,7 +337,7 @@ def import_n8n(data: dict[str, Any], name: str | None = None) -> AgentGraph:
     """
     graph = AgentGraph(name=name or data.get("name", "Imported n8n workflow"))
     id_by_name: dict[str, str] = {}
-    for raw in data.get("nodes", []):
+    for raw in (data.get("nodes") or []):
         node_name = str(raw.get("name") or raw.get("id"))
         node_id = node_name
         n8n_type = str(raw.get("type", ""))  # e.g. "n8n-nodes-base.httpRequest"
@@ -362,7 +365,7 @@ def import_dify(data: dict[str, Any], name: str | None = None) -> AgentGraph:
     )
     app_name = name or data.get("app", {}).get("name") or data.get("name", "Imported Dify app")
     graph = AgentGraph(name=app_name)
-    for raw in graph_data.get("nodes", []):
+    for raw in (graph_data.get("nodes") or []):
         node_id = str(raw.get("id"))
         node_data = raw.get("data", {})
         dify_type = str(node_data.get("type", "")).lower()
@@ -373,7 +376,7 @@ def import_dify(data: dict[str, Any], name: str | None = None) -> AgentGraph:
         else:
             node_type, config = _infer_node_type(str(label), dify_type)
         graph.add_node(Node(id=node_id, type=node_type, label=str(label), config=config))
-    for raw in graph_data.get("edges", []):
+    for raw in (graph_data.get("edges") or []):
         source, target = str(raw.get("source")), str(raw.get("target"))
         if graph.has_node(source) and graph.has_node(target):
             graph.add_edge(source, target)
@@ -384,7 +387,7 @@ def import_dify(data: dict[str, Any], name: str | None = None) -> AgentGraph:
 def import_openai_builder(data: dict[str, Any], name: str | None = None) -> AgentGraph:
     """Import an OpenAI Agent Builder / ReactFlow-style workflow JSON."""
     graph = AgentGraph(name=name or data.get("name", "Imported OpenAI Agent Builder workflow"))
-    for raw in data.get("nodes", []):
+    for raw in (data.get("nodes") or []):
         node_id = str(raw.get("id"))
         node_data = raw.get("data", {})
         raw_type = str(raw.get("type") or node_data.get("type", "")).lower()
@@ -395,7 +398,7 @@ def import_openai_builder(data: dict[str, Any], name: str | None = None) -> Agen
         else:
             node_type, config = _infer_node_type(str(label), raw_type)
         graph.add_node(Node(id=node_id, type=node_type, label=str(label), config=config))
-    for raw in data.get("edges", []):
+    for raw in (data.get("edges") or []):
         source = str(raw.get("source") or raw.get("from"))
         target = str(raw.get("target") or raw.get("to"))
         if graph.has_node(source) and graph.has_node(target):
@@ -447,6 +450,11 @@ def detect_format(data: dict[str, Any]) -> str:
 
 def import_generic_json(data: dict[str, Any], name: str | None = None) -> AgentGraph:
     """Import any supported JSON workflow, sniffing the dialect from its shape."""
+    if not isinstance(data, dict):
+        raise ValueError(
+            "Expected a JSON object describing a workflow "
+            f"(got {type(data).__name__}); provide an agent/workflow export."
+        )
     fmt = detect_format(data)
     if fmt == "n8n":
         return import_n8n(data, name=name)
