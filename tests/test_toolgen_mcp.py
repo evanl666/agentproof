@@ -78,3 +78,48 @@ def test_add_tools_empty_raises(tmp_path):
     state.build(DEFAULT_SPEC)
     with pytest.raises(ValueError):
         state.add_tools([])
+
+
+def test_suggest_bindings_matches_by_label_and_risk():
+    from agentproof.mcp_catalog import suggest_bindings
+    s = suggest_bindings("Process refund", {"money": True})
+    assert s and s[0]["server"] == "stripe" and "refund" in s[0]["tool"].lower()
+    # A pure data lookup should surface a data server even without label overlap.
+    s2 = suggest_bindings("Fetch account details", {"pii": True})
+    assert any(c["server"] in ("stripe", "postgres", "gdrive", "github") for c in s2)
+
+
+def test_connect_info_and_bind_roundtrip(tmp_path):
+    st = StudioState(tmp_path)
+    st.build(DEFAULT_SPEC)
+    info = st.connect_info()
+    assert info["tools"] and all("suggestions" in t and "binding" in t for t in info["tools"])
+    tid = info["tools"][0]["id"]
+    st.bind_tool(tid, {"type": "mcp", "server": "stripe", "tool": "Issue refund"})
+    assert st.graph.node(tid).config["binding"] == {"type": "mcp", "server": "stripe", "tool": "Issue refund"}
+    # Re-binding to stub clears it.
+    st.bind_tool(tid, {"type": "stub"})
+    assert "binding" not in st.graph.node(tid).config
+
+
+def test_bind_tool_validation(tmp_path):
+    st = StudioState(tmp_path)
+    st.build(DEFAULT_SPEC)
+    tid = st.graph.nodes_of_type(NodeType.TOOL)[0].id
+    with pytest.raises(ValueError):
+        st.bind_tool(tid, {"type": "nonsense"})
+
+
+def test_mcp_bound_export_generates_client_call(tmp_path, monkeypatch):
+    import ast
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    st = StudioState(tmp_path)
+    st.build(DEFAULT_SPEC)
+    spend = next(n for n in st.graph.nodes_of_type(NodeType.TOOL) if n.config.get("spend"))
+    st.bind_tool(spend.id, {"type": "mcp", "server": "stripe", "tool": "Issue refund"})
+    st.simulate(); st.apply_autofix()
+    from agentproof.toolgen import render_tools_module
+    mod = render_tools_module(st.graph, spec=st.spec)
+    ast.parse(mod)
+    assert "_mcp_call" in mod and "'stripe', 'Issue refund'" in mod
+    assert "STRIPE_API_KEY" in mod  # credential manifest surfaced

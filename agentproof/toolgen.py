@@ -95,6 +95,7 @@ _SHAPES = {
 
 def render_tool_body(node: Node) -> list[str]:
     reads, example_return, todo, raise_stub = _SHAPES[_kind(node)]
+    binding = node.config.get("binding") or {}
     retry = node.config.get("retry")
     lines: list[str] = []
     if retry:
@@ -103,6 +104,21 @@ def render_tool_body(node: Node) -> list[str]:
             f"backoff_seconds={retry.get('backoff_seconds', 2)})"
         )
     lines.append(f"def {node.id}(state: dict) -> dict:")
+
+    # MCP-bound (from the Connect step): call the mapped server/tool via the client.
+    if binding.get("type") == "mcp":
+        server, mtool = binding.get("server", ""), binding.get("tool", "")
+        doc = [f'    """{node.label}. Powered by the {server!r} MCP server → "{mtool}".']
+        if reads:
+            doc.append("")
+            doc.append("    Reads from state:")
+            doc += [f"        {name} ({typ})" for name, typ in reads]
+        doc.append('    """')
+        lines += doc
+        lines.append(f"    return _mcp_call({server!r}, {mtool!r}, state)")
+        lines += ["", ""]
+        return lines
+
     doc = [f'    """{node.label}.', ""]
     if reads:
         doc.append("    Reads from state:")
@@ -116,7 +132,12 @@ def render_tool_body(node: Node) -> list[str]:
         expr = f"{caster}(state.get({name!r}) or 0)" if caster else f"state.get({name!r})"
         lines.append(f"    {name}: {typ} = {expr}")
     lines.append(f"    # TODO: {todo}")
-    if raise_stub:
+    # A tool the user bound to "your own function" gets a plain, fill-in scaffold;
+    # everything else raises until wired so it can't silently succeed.
+    if binding.get("type") == "function":
+        lines.append(f"    # ↑ Connect step: implement {node.id} here and return the update above.")
+        lines.append(f"    return {example_return}")
+    elif raise_stub:
         lines.append(f"    raise NotImplementedError({('Wire ' + node.id + ' to your real system')!r})")
     else:
         lines.append(f"    return {example_return}")
@@ -124,9 +145,52 @@ def render_tool_body(node: Node) -> list[str]:
     return lines
 
 
+def _mcp_helper(graph: AgentGraph) -> list[str]:
+    """The _mcp_call shim + a manifest of which servers/creds the agent needs."""
+    servers: dict[str, set] = {}
+    for n in graph.nodes_of_type(NodeType.TOOL):
+        b = n.config.get("binding") or {}
+        if b.get("type") == "mcp" and b.get("server"):
+            servers.setdefault(b["server"], set())
+    if not servers:
+        return []
+    from agentproof.mcp_catalog import server_env
+
+    manifest = {s: server_env(s) for s in servers}
+    return [
+        "",
+        "# ── MCP wiring (from the Connect step) ────────────────────────────────",
+        "# This agent's tools are bound to these MCP servers. Set the env vars, then",
+        "# wire `_mcp_call` to your MCP client (e.g. the `mcp` Python SDK's stdio or",
+        "# SSE client). Until then, calls raise so an unconnected tool can't succeed.",
+        f"MCP_SERVERS = {manifest!r}",
+        "",
+        "",
+        "def _mcp_call(server: str, tool: str, state: dict) -> dict:",
+        '    """Invoke `tool` on the named MCP `server` with the run state as args."""',
+        "    # TODO: connect your MCP client, e.g.:",
+        "    #   from mcp import ClientSession, StdioServerParameters",
+        "    #   from mcp.client.stdio import stdio_client",
+        "    #   async with stdio_client(SERVER_PARAMS[server]) as (r, w):",
+        "    #       async with ClientSession(r, w) as s:",
+        "    #           res = await s.call_tool(tool, arguments=state)",
+        "    #   return res.structuredContent or {}",
+        "    raise NotImplementedError(",
+        "        f'Connect the {server!r} MCP server (creds: {MCP_SERVERS.get(server)}) "
+        "and call {tool!r}'",
+        "    )",
+        "",
+        "",
+    ]
+
+
 def render_tools_module(graph: AgentGraph, spec=None, model: str | None = None) -> str:
-    """Render tools.py. LLM-written bodies when a key is present, else rich scaffolds."""
-    if spec is not None:
+    """Render tools.py. LLM-written bodies when a key is present, else rich scaffolds.
+
+    If any tool was bound in the Connect step, use the deterministic renderer so
+    those bindings (MCP calls / function scaffolds) are honored exactly."""
+    has_bindings = any(n.config.get("binding") for n in graph.nodes_of_type(NodeType.TOOL))
+    if spec is not None and not has_bindings:
         from agentproof.intelligence import use_llm
 
         if use_llm(model):
@@ -135,6 +199,7 @@ def render_tools_module(graph: AgentGraph, spec=None, model: str | None = None) 
             except Exception:  # noqa: BLE001 — deterministic scaffold fallback
                 pass
     lines = list(_HEADER)
+    lines += _mcp_helper(graph)  # _mcp_call shim, only when a tool is MCP-bound
     for node in graph.nodes_of_type(NodeType.TOOL):
         lines += render_tool_body(node)
     return "\n".join(lines)

@@ -100,6 +100,26 @@ MCP_CATALOG: list[dict[str, Any]] = [
 ]
 
 
+# Credentials each server needs at connect time (surfaced in the Connect step).
+_SERVER_ENV = {
+    "github": ["GITHUB_TOKEN"],
+    "stripe": ["STRIPE_API_KEY"],
+    "postgres": ["DATABASE_URL"],
+    "slack": ["SLACK_BOT_TOKEN"],
+    "filesystem": [],
+    "web-search": ["BRAVE_API_KEY"],
+    "gdrive": ["GOOGLE_OAUTH_TOKEN"],
+    "email": ["SMTP_URL"],
+}
+
+_STOPWORDS = {"the", "a", "an", "to", "of", "and", "for", "on", "in", "with",
+              "results", "result", "data", "information", "info", "your", "my", "any"}
+
+
+def server_env(server_id: str) -> list[str]:
+    return _SERVER_ENV.get(server_id, [])
+
+
 def catalog() -> list[dict[str, Any]]:
     return MCP_CATALOG
 
@@ -109,3 +129,42 @@ def server(server_id: str) -> dict[str, Any]:
         if s["id"] == server_id:
             return s
     raise KeyError(server_id)
+
+
+def _tokens(text: str) -> set[str]:
+    import re
+
+    words = re.sub(r"[^a-z0-9]+", " ", text.lower()).split()
+    return {w for w in words if w not in _STOPWORDS and len(w) > 2}
+
+
+def _risk_bonus(tool_risk: dict, mcp_risk: dict) -> int:
+    bonus = 0
+    for flag, pts in (("money", 3), ("high_risk", 2), ("external", 1), ("pii", 1)):
+        if tool_risk.get(flag) and mcp_risk.get(flag):
+            bonus += pts
+    return bonus
+
+
+def suggest_bindings(tool_label: str, tool_risk: dict[str, Any], limit: int = 3) -> list[dict[str, Any]]:
+    """Rank MCP (server, tool) pairs that could power a given behavioral tool.
+
+    Matches on label-token overlap plus a shared-risk bonus, so "Process refund"
+    (money) surfaces Stripe's "Issue refund" and a data-lookup tool surfaces
+    Postgres. Returns the best few candidates; the UI also offers function/stub.
+    """
+    ltokens = _tokens(tool_label)
+    out: list[dict[str, Any]] = []
+    for srv in MCP_CATALOG:
+        for t in srv["tools"]:
+            overlap = len(ltokens & _tokens(t["label"]))
+            score = overlap * 3 + _risk_bonus(tool_risk, t.get("risk", {}))
+            if score <= 0:
+                continue
+            out.append({
+                "type": "mcp", "server": srv["id"], "server_name": srv["name"],
+                "icon": srv.get("icon", "🔌"), "tool": t["label"], "score": score,
+                "env": server_env(srv["id"]),
+            })
+    out.sort(key=lambda c: -c["score"])
+    return out[:limit]

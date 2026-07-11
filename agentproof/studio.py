@@ -473,6 +473,51 @@ class StudioState:
         self.save()
         return self.snapshot()
 
+    # -- Connect step: bind each behavioral tool to a real implementation ------
+
+    @staticmethod
+    def _tool_risk(node: Node) -> dict[str, bool]:
+        c = node.config
+        return {"money": bool(c.get("spend")), "high_risk": bool(c.get("high_risk")),
+                "external": bool(c.get("external")),
+                "pii": bool(c.get("returns_pii") or c.get("sensitive"))}
+
+    def connect_info(self) -> dict[str, Any]:
+        """Each tool with its current binding + ranked MCP suggestions (auto-match)."""
+        if not self.graph:
+            raise ValueError("Build or import an agent first")
+        from agentproof.mcp_catalog import suggest_bindings
+
+        tools = []
+        for n in self.graph.nodes_of_type(NodeType.TOOL):
+            risk = self._tool_risk(n)
+            tools.append({
+                "id": n.id, "label": n.label, "risk": risk,
+                "binding": n.config.get("binding") or {"type": "stub"},
+                "suggestions": suggest_bindings(n.label, risk),
+            })
+        return {"tools": tools}
+
+    def bind_tool(self, tool_id: str, binding: dict[str, Any] | None) -> dict[str, Any]:
+        if not self.graph:
+            raise ValueError("Build or import an agent first")
+        node = self.graph.node(tool_id)
+        if node.type != NodeType.TOOL:
+            raise ValueError(f"{tool_id!r} is not a tool")
+        btype = (binding or {}).get("type", "stub")
+        if btype not in ("mcp", "function", "stub"):
+            raise ValueError("binding type must be one of: mcp, function, stub")
+        if btype == "stub":
+            node.config.pop("binding", None)
+        elif btype == "mcp":
+            node.config["binding"] = {"type": "mcp",
+                                      "server": str((binding or {}).get("server", "")),
+                                      "tool": str((binding or {}).get("tool", ""))}
+        else:
+            node.config["binding"] = {"type": "function"}
+        self.save()
+        return {"ok": True, "tool_id": tool_id, "binding": node.config.get("binding") or {"type": "stub"}}
+
     def run_message(self, message: str, approved: bool = False) -> dict[str, Any]:
         if not (self.spec and self.graph):
             raise ValueError("Build or import an agent first")
@@ -815,6 +860,8 @@ input:focus, textarea:focus, select:focus {{ border-color: var(--blue) !importan
     <div class="menu">
       <button id="ship-toggle" class="primary">Ship ▾</button>
       <div class="panel-pop" id="ship-menu">
+        <button id="btn-connect" class="menu-item" style="font-weight:600">🔌 Connect tools…</button>
+        <div class="menu-sep"></div>
         <div class="menu-row">
           <select id="export-fw" title="Target framework">
             <option value="langgraph">LangGraph</option>
@@ -934,6 +981,34 @@ input:focus, textarea:focus, select:focus {{ border-color: var(--blue) !importan
         <label><input type="checkbox" id="ct-pii"> 🔒 returns PII</label>
       </div>
       <button id="ct-add" class="primary" style="margin-top:10px">Add tool →</button>
+    </div>
+  </div>
+</div>
+<div id="connect" class="overlay">
+  <div class="modal" style="width:620px">
+    <div class="mhead" style="padding-bottom:14px">
+      <b>🔌 Connect tools</b><span class="mclose" id="cn-close">✕</span>
+      <div class="sub" style="margin-top:6px">Bind each tool to a real implementation. ✨ = auto-matched. Export/Deploy will wire the bindings for you.</div>
+    </div>
+    <div class="mbody"><div id="cn-list"></div></div>
+  </div>
+</div>
+<div id="create" class="overlay">
+  <div class="modal" style="width:640px">
+    <div class="mhead" style="border:none;padding:26px 26px 0;text-align:center">
+      <span class="mclose" id="cr-close">✕</span>
+      <h2 style="font-size:20px;text-transform:none;letter-spacing:normal;color:var(--text);border:none;padding:0">What should your agent do?</h2>
+    </div>
+    <div class="mbody" style="padding:16px 26px 26px">
+      <textarea id="cr-desc" placeholder="e.g. A support agent that looks up orders and issues refunds. Refunds over $100 need approval. Never leak customer PII."
+        style="width:100%;height:88px;border:1px solid var(--border);border-radius:12px;padding:12px;font:13px/1.5 inherit;background:#fafafa"></textarea>
+      <div style="display:flex;justify-content:flex-end;margin-top:10px">
+        <button id="cr-generate" class="primary" style="padding:9px 20px">✨ Generate agent →</button>
+      </div>
+      <div class="sub" style="margin:16px 0 8px">Or start from a template:</div>
+      <div id="cr-examples" style="display:flex;flex-wrap:wrap;gap:8px"></div>
+      <div class="sub" style="margin:18px 0 8px">Already have an agent?</div>
+      <button id="cr-import" class="ghost">⇪ Import code / workflow JSON</button>
     </div>
   </div>
 </div>
@@ -1463,14 +1538,7 @@ $('project-select').addEventListener('change', async e => {{
   PROJECTS.active = e.target.value; STATE.diff = null; render();
   toast('Switched to ' + e.target.selectedOptions[0].textContent.split('  ·')[0]);
 }});
-$('btn-newproj').addEventListener('click', async () => {{
-  const name = prompt('Name your new agent:', 'Untitled Agent');
-  if (name === null) return;
-  PROJECTS = await api('/api/projects/new', {{name}});
-  fillSelect();
-  STATE = await api('/api/state'); STATE.diff = null; render();
-  toast('Created "' + name + '" — describe it in the spec and Build');
-}});
+$('btn-newproj').addEventListener('click', () => openCreate());
 $('btn-delproj').addEventListener('click', async () => {{
   const cur = PROJECTS.projects.find(p => p.id === PROJECTS.active);
   if (!cur || !confirm('Delete "' + cur.name + '"? This cannot be undone.')) return;
@@ -1506,6 +1574,94 @@ function renderBoard() {{
 }}
 $('btn-board').addEventListener('click', async () => {{ await loadProjects(); renderBoard(); $('board').classList.add('open'); }});
 $('board-close').addEventListener('click', () => $('board').classList.remove('open'));
+
+// ---- Connect step: bind each tool to a real implementation (MCP / function) ----
+function bindLabel(b) {{
+  if (!b || b.type === 'stub') return '— Leave as stub';
+  if (b.type === 'function') return '🔧 Your own function';
+  return '🔌 ' + b.server + ' · ' + b.tool;
+}}
+async function openConnect() {{
+  closeMenus();
+  if (!STATE || !STATE.graph) return toast('Build an agent first');
+  let info;
+  try {{ info = await api('/api/connect'); }} catch (e) {{ return toast(e.message); }}
+  const box = $('cn-list'); box.innerHTML = '';
+  if (!info.tools.length) box.innerHTML = '<p class="muted">No tools to connect yet.</p>';
+  info.tools.forEach(t => {{
+    const opts = [];
+    t.suggestions.forEach((s, i) => {{
+      const val = 'mcp:' + s.server + ':' + s.tool;
+      const sel = (t.binding.type === 'mcp' && t.binding.server === s.server && t.binding.tool === s.tool);
+      opts.push(`<option value="${{val}}" ${{sel?'selected':''}}>${{s.icon}} ${{s.server_name}} · ${{s.tool}}${{i===0?' ✨':''}}</option>`);
+    }});
+    opts.push(`<option value="function" ${{t.binding.type==='function'?'selected':''}}>🔧 Your own function</option>`);
+    opts.push(`<option value="stub" ${{(!t.binding||t.binding.type==='stub')?'selected':''}}>— Leave as stub</option>`);
+    const creds = (t.suggestions[0] && t.suggestions[0].env && t.suggestions[0].env.length)
+      ? `<div class="sub" style="font-size:11px">needs: ${{t.suggestions[0].env.join(', ')}}</div>` : '';
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #f0f0f0';
+    row.innerHTML = `<div style="flex:1"><b style="font-size:13px">🔧 ${{t.label}}</b>` +
+      `<div class="sub" style="font-size:11px">${{Object.keys(t.risk).filter(k=>t.risk[k]).map(k=>({{money:'💰',high_risk:'⚠',external:'🌐',pii:'🔒'}}[k])).join(' ')||'no special risk'}}</div>${{creds}}</div>` +
+      `<select data-tool="${{t.id}}" style="min-width:220px;background:#fafafa;border:1px solid var(--border);border-radius:8px;padding:7px 9px;font-size:12px">${{opts.join('')}}</select>`;
+    box.appendChild(row);
+  }});
+  box.querySelectorAll('select[data-tool]').forEach(sel => sel.addEventListener('change', async () => {{
+    const v = sel.value; let binding;
+    if (v === 'function') binding = {{type:'function'}};
+    else if (v === 'stub') binding = {{type:'stub'}};
+    else {{ const [, server, tool] = v.match(/^mcp:([^:]+):(.+)$/); binding = {{type:'mcp', server, tool}}; }}
+    try {{ await api('/api/tool/bind', {{id: sel.dataset.tool, binding}}); toast('Bound ' + sel.dataset.tool + ' → ' + bindLabel(binding)); }}
+    catch (e) {{ toast(e.message); }}
+  }}));
+  $('connect').classList.add('open');
+}}
+$('btn-connect').addEventListener('click', openConnect);
+$('cn-close').addEventListener('click', () => $('connect').classList.remove('open'));
+$('connect').addEventListener('click', e => {{ if (e.target === $('connect')) $('connect').classList.remove('open'); }});
+
+// ---- Create flow: describe → generate → verify ----
+const EXAMPLES = [
+  ['💳 Refund bot', 'A customer support agent that looks up orders and issues refunds. Refunds over $100 need human approval. Never leak customer PII.'],
+  ['🗄 SQL analyst', 'A SQL analyst agent that runs read-only SELECT queries and exports results. Writes/deletes (INSERT/UPDATE/DELETE) require approval. Never expose PII columns externally.'],
+  ['🚀 DevOps', 'An SRE agent that restarts services, scales deployments, and rolls back releases. Deleting namespaces or deploying to prod needs on-call approval. Never print secrets.'],
+  ['📞 Sales', 'A B2B sales agent that looks up CRM contacts, sends outreach emails, and applies discounts. Discounts over 20% need manager approval. Never share other customers data.'],
+  ['🏥 Healthcare', 'A patient intake agent that reads records, books appointments, and processes copay refunds. Copay refunds over $75 need staff approval. Never disclose PHI.'],
+  ['🐙 GitHub', 'A GitHub triage agent that reads issues and PRs, adds comments, and assigns work. Merging or deleting repos needs approval. Never expose secrets or source code.'],
+];
+function openCreate() {{
+  $('cr-desc').value = '';
+  const ex = $('cr-examples'); ex.innerHTML = '';
+  EXAMPLES.forEach(([label, prose]) => {{
+    const b = document.createElement('button'); b.className = 'ghost'; b.textContent = label;
+    b.style.cssText = 'border:1px solid var(--border)';
+    b.addEventListener('click', () => {{ $('cr-desc').value = prose; $('cr-desc').focus(); }});
+    ex.appendChild(b);
+  }});
+  $('create').classList.add('open');
+  setTimeout(() => $('cr-desc').focus(), 50);
+}}
+$('cr-close').addEventListener('click', () => $('create').classList.remove('open'));
+$('cr-import').addEventListener('click', () => {{ $('create').classList.remove('open'); $('file').click(); }});
+$('cr-generate').addEventListener('click', async () => {{
+  const desc = $('cr-desc').value.trim();
+  if (!desc) return toast('Describe your agent first (or pick a template)');
+  const name = desc.split(/[.\n]/)[0].split(' ').slice(0, 5).join(' ') || 'New agent';
+  $('cr-generate').textContent = '✨ Generating…'; $('cr-generate').disabled = true;
+  try {{
+    PROJECTS = await api('/api/projects/new', {{name}});
+    STATE = await api('/api/build', {{spec_text: desc}});   // LLM-native when a key is present
+    STATE = await api('/api/simulate');
+    fillSelect(); STATE.diff = null;
+    if (specMode === 'text') $('spec').value = STATE.spec_text;
+    render();
+    $('create').classList.remove('open');
+    const failed = (STATE.results || []).filter(r => !r.passed).length;
+    toast(failed ? ('Built "' + STATE.spec.name + '" — ' + failed + ' issues found. Click 🛠 Auto-fix.')
+                 : ('Built "' + STATE.spec.name + '" ✓'));
+  }} catch (e) {{ toast(e.message); }}
+  finally {{ $('cr-generate').textContent = '✨ Generate agent →'; $('cr-generate').disabled = false; }}
+}});
 
 api('/api/state').then(s => {{ STATE = s; render(); }});
 loadProjects();
@@ -1641,6 +1797,8 @@ def make_handler(workspace: Workspace):
                 from agentproof.mcp_catalog import catalog
 
                 self._send(200, {"servers": catalog()})
+            elif self.path == "/api/connect":
+                self._send(200, state().connect_info())
             else:
                 self._send(404, {"error": "not found"})
 
@@ -1695,6 +1853,8 @@ def make_handler(workspace: Workspace):
                     result = st.remove_tool(body["id"])
                 elif self.path == "/api/tool/update":
                     result = st.update_tool(body["id"], body.get("label"), body.get("risk"))
+                elif self.path == "/api/tool/bind":
+                    result = st.bind_tool(body["id"], body.get("binding"))
                 elif self.path == "/api/run":
                     result = st.run_message(body["message"], body.get("approved", False))
                 elif self.path == "/api/prove":
