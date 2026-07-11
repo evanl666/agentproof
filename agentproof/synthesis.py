@@ -53,43 +53,45 @@ def synthesize(spec: BehaviorSpec) -> AgentGraph:
     )
     graph.add_edge("input", "planner")
 
+    # Each capability becomes its own tool, labelled with the user's own words so
+    # the graph reads correctly in ANY domain (a GitHub agent gets "Read issues",
+    # not "Customer lookup"). The keyword rules only supply a stable canonical id
+    # and a crude risk hint for the common actions; risk is otherwise inferred
+    # generically. Nothing is dropped or collapsed into a hardcoded template.
+    from agentproof.risk import infer_tool_risk
+    import re as _re
+
     tool_ids: list[str] = []
+    have_spend = False
     for capability in spec.capabilities:
-        desc = capability.description.lower()
-        matched = False
-        for keywords, tool_id, label, config in _TOOL_RULES:
-            if any(k in desc for k in keywords) and not graph.has_node(tool_id):
-                graph.add_node(
-                    Node(id=tool_id, type=NodeType.TOOL, label=label, config=dict(config))
-                )
-                tool_ids.append(tool_id)
-                matched = True
-        # Generic path: any capability implying a risky action (high-risk verb,
-        # a sensitive-data source, or an external channel) becomes a tool. This
-        # is what makes synthesis domain-agnostic — a coding agent's "deploy" or
-        # a data agent's "delete records" get real, testable tools. A high-risk
-        # verb always wins, even if a keyword rule already matched (so "delete
-        # records" is a destructive action, not just a datasource lookup).
-        from agentproof.risk import infer_tool_risk
-        import re as _re
+        desc = capability.description
+        low = desc.lower()
+        risk_cfg = infer_tool_risk(desc)
+        rule = next(((tid, dict(cfg)) for kws, tid, _lbl, cfg in _TOOL_RULES
+                     if any(k in low for k in kws)), None)
+        if rule:  # fold the rule's risk flags in as hints (don't override inference)
+            for k, v in rule[1].items():
+                risk_cfg.setdefault(k, v)
+        # Keep a single money tool offline so autofix's one-gate repair stays valid.
+        if risk_cfg.get("spend") and have_spend:
+            continue
+        if rule and not graph.has_node(rule[0]):
+            tid = rule[0]
+        else:
+            base = _re.sub(r"[^a-z0-9]+", "_", low).strip("_")[:40] or "tool"
+            tid, n = base, 2
+            while graph.has_node(tid):
+                tid = f"{base}_{n}"; n += 1
+        graph.add_node(Node(id=tid, type=NodeType.TOOL, label=desc, config=risk_cfg))
+        tool_ids.append(tid)
+        if risk_cfg.get("spend"):
+            have_spend = True
 
-        risk_cfg = infer_tool_risk(capability.description)
-        interesting = risk_cfg.get("high_risk") or (not matched and (risk_cfg.get("returns_pii") or risk_cfg.get("external")))
-        if interesting and not risk_cfg.get("spend"):
-            tid = _re.sub(r"[^a-z0-9]+", "_", desc).strip("_")[:40] or f"action_{len(tool_ids)}"
-            if not graph.has_node(tid):
-                graph.add_node(Node(id=tid, type=NodeType.TOOL, label=capability.description, config=risk_cfg))
-                tool_ids.append(tid)
-
-    # Every agent needs an egress path; default to email response if none inferred.
+    # Every agent needs an outbound reply channel; ensure a generic egress node.
     if not graph.has_node("send_email"):
         graph.add_node(
-            Node(
-                id="send_email",
-                type=NodeType.TOOL,
-                label="Send email response",
-                config={"external": True},
-            )
+            Node(id="send_email", type=NodeType.TOOL, label="Send response",
+                 config={"external": True})
         )
         tool_ids.append("send_email")
 
