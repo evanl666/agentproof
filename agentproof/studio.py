@@ -946,10 +946,25 @@ function showNode(node) {{
     `<pre class="note" style="white-space:pre-wrap">${{JSON.stringify(node.config, null, 2)}}</pre>`;
 }}
 
-$('btn-build').addEventListener('click', async () => {{
-  STATE = await api('/api/build', {{spec_text: $('spec').value}});
-  STATE.diff = null; render(); toast('Graph synthesized · ' + STATE.scenarios.length + ' scenarios generated');
-}});
+// One build action, mode-aware: builds from whichever editor you're looking at
+// (the Text textarea or the Visual form) so the button can never rebuild a stale
+// source. Both "Build from spec" and "Build this agent →" call this.
+async function doBuild() {{
+  try {{
+    if (specMode === 'visual') {{
+      const payload = collectSpec();
+      if (!payload.capabilities.length) return toast('Add at least one capability (or switch to ✍️ Text)');
+      STATE = await api('/api/build-structured', payload);
+      toast('Built "' + payload.name + '" · ' + STATE.scenarios.length + ' scenarios');
+    }} else {{
+      if (!$('spec').value.trim()) return toast('Write a spec first');
+      STATE = await api('/api/build', {{spec_text: $('spec').value}});
+      toast('Graph synthesized · ' + STATE.scenarios.length + ' scenarios generated');
+    }}
+  }} catch (e) {{ return toast(e.message); }}
+  STATE.diff = null; render();
+}}
+$('btn-build').addEventListener('click', doBuild);
 
 // ---- visual spec editor: build guardrails without writing prose ----
 const GUARDS = [
@@ -1014,15 +1029,14 @@ function setSpecMode(mode) {{
   $('mode-text').classList.toggle('active', mode === 'text');
 }}
 $('mode-visual').addEventListener('click', () => {{ renderSpecForm(); setSpecMode('visual'); }});
-$('mode-text').addEventListener('click', () => setSpecMode('text'));
-$('sp-addcap').addEventListener('click', () => addCapRow(''));
-$('btn-build-visual').addEventListener('click', async () => {{
-  const payload = collectSpec();
-  if (!payload.capabilities.length) return toast('Add at least one capability');
-  try {{ STATE = await api('/api/build-structured', payload); }}
-  catch (e) {{ return toast(e.message); }}
-  STATE.diff = null; render(); toast('Built "' + payload.name + '" · ' + STATE.scenarios.length + ' scenarios');
+$('mode-text').addEventListener('click', () => {{
+  // Show the current spec text so it can be edited/pasted over (don't clobber
+  // text the user already typed but hasn't built yet).
+  if (STATE && !$('spec').value.trim()) $('spec').value = STATE.spec_text || '';
+  setSpecMode('text');
 }});
+$('sp-addcap').addEventListener('click', () => addCapRow(''));
+$('btn-build-visual').addEventListener('click', doBuild);
 $('btn-simulate').addEventListener('click', async () => {{
   try {{ STATE = await api('/api/simulate'); }} catch (e) {{ return toast(e.message); }}
   render();
