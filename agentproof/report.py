@@ -209,7 +209,7 @@ function renderGraph(svg, graph, onNodeClick) {
     const rect = document.createElementNS(ns, 'rect');
     rect.setAttribute('x', p.x); rect.setAttribute('y', p.y);
     rect.setAttribute('width', p.w); rect.setAttribute('height', p.h);
-    rect.setAttribute('rx', 8); rect.setAttribute('fill', '#161b22');
+    rect.setAttribute('rx', 8); rect.setAttribute('fill', window.NODE_FILL || '#161b22');
     rect.setAttribute('stroke', NODE_COLORS[n.type] || '#8b949e');
     g.appendChild(rect);
     const t1 = document.createElementNS(ns, 'text');
@@ -251,7 +251,7 @@ function resetEdges(svg) {
 }
 function highlightResult(svg, result) {
   resetEdges(svg);
-  svg.querySelectorAll('.node rect').forEach(r => r.setAttribute('fill', '#161b22'));
+  svg.querySelectorAll('.node rect').forEach(r => r.setAttribute('fill', window.NODE_FILL || '#161b22'));
   if (!result) return;
   const color = result.passed ? '#3fb950' : '#f85149';
   const marker = result.passed ? 'url(#arrow-green)' : 'url(#arrow-red)';

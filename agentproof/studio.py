@@ -592,87 +592,159 @@ def _studio_html() -> str:
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>AgentProof Studio</title>
 <style>{CANVAS_CSS}
-/* Softer, modern slate palette — less harsh than pure GitHub-dark. */
+/* ── Figma-style light theme (UI3): white panels on a light canvas, hairline
+   borders, Figma-blue accent, a floating pill toolbar, and tools tucked into
+   dropdown menus. ─────────────────────────────────────────────────────────── */
 :root {{
-  --bg: #14161d; --panel: #1b1e27; --border: #2b303c; --text: #eceef3;
-  --muted: #9aa3b2; --blue: #6aa3ff; --purple: #b18cff;
+  --bg: #f5f5f5; --panel: #ffffff; --border: #e6e6e6; --text: #1e1e1e;
+  --muted: #8a8a8a; --blue: #0d99ff; --purple: #7b61ff; --green: #14ae5c;
+  --red: #e03e1a; --amber: #cf8a00;
+  --node-fill: #ffffff;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,.06); --shadow-md: 0 4px 16px rgba(0,0,0,.10);
+  --shadow-lg: 0 10px 34px rgba(0,0,0,.16);
 }}
-body {{ background: radial-gradient(1200px 600px at 20% -10%, #1b2130 0%, var(--bg) 55%) fixed; }}
-.panel {{ border-radius: 12px; }}
-.panel h2 {{ background: transparent; border-bottom: 1px solid var(--border); }}
-header {{ background: rgba(20,22,29,.7); backdrop-filter: blur(6px); }}
-.scenario:hover, .scenario.active {{ background: #232937; }}
-.toolbar {{ display: flex; gap: 8px; margin-left: auto; align-items: center; flex-wrap: wrap; }}
-button {{ background: #232733; color: var(--text); border: 1px solid var(--border);
-  border-radius: 8px; padding: 6px 13px; font-size: 13px; cursor: pointer; transition: border-color .15s, background .15s; }}
-button:hover {{ border-color: var(--blue); background: #2a2f3d; }}
-button.primary {{ background: #2f6feb; border-color: #4989f2; color: #fff; }}
-button.primary:hover {{ background: #3b78f0; }}
-textarea {{ width: 100%; height: 46%; background: #0d1117; color: var(--text);
+body {{ background: var(--bg); color: var(--text);
+  font: 13px/1.5 "Inter", -apple-system, "Segoe UI", sans-serif; }}
+svg text {{ fill: var(--text); }}
+.muted, .note {{ color: var(--muted); }}
+
+/* Top bar */
+header {{ display: flex; align-items: center; gap: 14px; height: 48px; padding: 0 14px;
+  background: var(--panel); border-bottom: 1px solid var(--border); }}
+header h1 {{ font-size: 14px; font-weight: 600; letter-spacing: -.01em; }}
+.chip {{ border: 1px solid var(--border); background: #fafafa; }}
+.chip.good {{ background: rgba(20,174,92,.10); border-color: rgba(20,174,92,.35); }}
+.chip.bad {{ background: rgba(224,62,26,.09); border-color: rgba(224,62,26,.30); }}
+.chip.warn {{ background: rgba(207,138,0,.10); border-color: rgba(207,138,0,.30); }}
+.chip.good b {{ color: var(--green); }} .chip.bad b {{ color: var(--red); }} .chip.warn b {{ color: var(--amber); }}
+
+/* Buttons */
+button {{ background: var(--panel); color: var(--text); border: 1px solid var(--border);
+  border-radius: 8px; padding: 6px 12px; font-size: 13px; cursor: pointer;
+  transition: background .12s, border-color .12s, box-shadow .12s; }}
+button:hover {{ background: #f5f7fa; border-color: #d5d7db; }}
+button.primary {{ background: var(--blue); border-color: var(--blue); color: #fff; }}
+button.primary:hover {{ background: #0a86e0; border-color: #0a86e0; }}
+.ghost {{ background: transparent; border-color: transparent; }}
+.ghost:hover {{ background: #f0f1f3; border-color: transparent; }}
+.mini {{ padding: 3px 9px !important; font-size: 12px; }}
+.iconbtn {{ padding: 6px 9px; }}
+
+/* Project switcher (Figma filename dropdown vibe) */
+.projbar {{ display: flex; gap: 4px; align-items: center; }}
+.projbar select {{ background: transparent; color: var(--text); border: 1px solid transparent;
+  border-radius: 7px; padding: 5px 8px; font-size: 13px; font-weight: 500; max-width: 220px; cursor: pointer; }}
+.projbar select:hover {{ background: #f0f1f3; }}
+.projbar button {{ padding: 5px 8px; }}
+.toolbar {{ display: flex; gap: 6px; margin-left: auto; align-items: center; }}
+
+/* Dropdown menus (Analyze / Ship) */
+.menu {{ position: relative; }}
+.menu > .panel-pop {{ position: absolute; right: 0; top: calc(100% + 6px); min-width: 210px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: var(--shadow-lg); padding: 6px; display: none; z-index: 70; }}
+.menu.open > .panel-pop {{ display: block; }}
+.menu-item {{ display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  border: none; background: transparent; border-radius: 8px; padding: 8px 10px; font-size: 13px; }}
+.menu-item:hover {{ background: #f2f6fb; }}
+.menu-sep {{ height: 1px; background: var(--border); margin: 6px 4px; }}
+.menu-row {{ display: flex; gap: 6px; align-items: center; padding: 6px 8px; }}
+.menu-row select {{ flex: 1; background: #fafafa; color: var(--text); border: 1px solid var(--border);
+  border-radius: 7px; padding: 6px 8px; font-size: 12px; }}
+
+/* Floating pill toolbar (Figma signature) */
+.dock {{ position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
+  display: flex; gap: 4px; padding: 6px; background: var(--panel);
+  border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow-lg); z-index: 40; }}
+.dock button {{ border: none; border-radius: 10px; padding: 8px 14px; font-weight: 500; }}
+.dock button:hover {{ background: #f0f1f3; }}
+.dock .primary:hover {{ background: #0a86e0; }}
+.dock .sep {{ width: 1px; background: var(--border); margin: 4px 2px; }}
+
+/* Layout: white side panels flanking a light-gray canvas (Figma) */
+.layout {{ display: grid; grid-template-columns: 288px 1fr 312px; gap: 0; padding: 0;
+  height: calc(100vh - 49px); }}
+.panel {{ background: var(--panel); border: none; border-radius: 0; overflow-y: auto; }}
+.layout > .panel:first-child {{ border-right: 1px solid var(--border); }}
+.layout > .panel:last-child {{ border-left: 1px solid var(--border); }}
+.panel h2 {{ font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+  padding: 12px 14px 8px; border-bottom: 1px solid var(--border); background: var(--panel); font-weight: 600; }}
+#canvas-wrap {{ background: var(--bg); }}
+#canvas-wrap h2 {{ background: transparent; border-bottom: none; }}
+.detail {{ padding: 10px 14px; }}
+.scenario {{ padding: 8px 14px; border-bottom: 1px solid #f0f0f0; }}
+.scenario:hover, .scenario.active {{ background: #f2f6fb; }}
+.violation {{ background: rgba(224,62,26,.07); border-left-color: var(--red); }}
+.fixitem {{ background: rgba(20,174,92,.08); border-left-color: var(--green); }}
+.covbar {{ background: #ececec; }}
+
+/* Graph nodes: light cards with a soft shadow */
+.node rect {{ filter: drop-shadow(0 1px 2px rgba(0,0,0,.10)); stroke-width: 1.75; }}
+svg text {{ font-weight: 500; }}
+
+textarea {{ width: 100%; height: 44%; background: #fbfbfb; color: var(--text);
   border: none; border-bottom: 1px solid var(--border); padding: 12px;
-  font: 12px/1.6 ui-monospace, monospace; resize: none; outline: none; }}
-.scorebar {{ display: flex; gap: 10px; padding: 10px 12px; flex-wrap: wrap; }}
-#toast {{ position: fixed; bottom: 16px; right: 16px; background: #1f6feb; padding: 10px 16px;
-  border-radius: 8px; display: none; }}
-.console-bar {{ display: flex; gap: 6px; align-items: center; padding: 8px 16px;
-  border-bottom: 1px solid var(--border); background: #0d1117; flex-wrap: wrap; }}
-.console-label {{ font-size: 12px; color: var(--muted); margin-right: 4px; }}
-.cbtn {{ background: #161b22; color: var(--text); border: 1px solid var(--border);
-  border-radius: 6px; padding: 5px 11px; font-size: 12px; cursor: pointer; }}
-.cbtn:hover {{ border-color: var(--purple); }}
-.analyze-menu {{ display: none; gap: 6px; }}
-.analyze-menu.open {{ display: inline-flex; flex-wrap: wrap; }}
-#console {{ position: fixed; right: 0; top: 0; bottom: 0; width: 460px; max-width: 92vw;
+  font: 12px/1.6 ui-monospace, "SF Mono", monospace; resize: none; outline: none; }}
+input[type=text], #run-msg, .spec-form input, .modal input, #ct-name {{
+  background: #fafafa; color: var(--text); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 10px; font-size: 13px; outline: none; }}
+input:focus, textarea:focus, select:focus {{ border-color: var(--blue) !important; }}
+.scorebar {{ display: flex; gap: 8px; padding: 10px 14px; flex-wrap: wrap; }}
+#toast {{ position: fixed; bottom: 84px; left: 50%; transform: translateX(-50%); background: #1e1e1e;
+  color: #fff; padding: 9px 16px; border-radius: 10px; display: none; box-shadow: var(--shadow-lg);
+  font-size: 13px; z-index: 95; }}
+
+/* Slide-out analysis console */
+#console {{ position: fixed; right: 0; top: 0; bottom: 0; width: 440px; max-width: 92vw;
   background: var(--panel); border-left: 1px solid var(--border); transform: translateX(100%);
-  transition: transform .2s; overflow-y: auto; z-index: 50; box-shadow: -8px 0 24px rgba(0,0,0,.4); }}
+  transition: transform .2s; overflow-y: auto; z-index: 92; box-shadow: var(--shadow-lg); }}
 #console.open {{ transform: translateX(0); }}
-#console .chead {{ display: flex; align-items: center; gap: 8px; padding: 12px 16px;
+#console .chead {{ display: flex; align-items: center; gap: 8px; padding: 14px 16px;
   border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--panel); }}
 #console .cbody {{ padding: 14px 16px; }}
 #console h3 {{ font-size: 14px; margin: 12px 0 6px; }}
 #console .close {{ margin-left: auto; cursor: pointer; color: var(--muted); font-size: 18px; }}
-.meter {{ height: 8px; background: var(--border); border-radius: 4px; margin: 4px 0 10px; overflow: hidden; }}
+.meter {{ height: 8px; background: #ececec; border-radius: 4px; margin: 4px 0 10px; overflow: hidden; }}
 .meter > div {{ height: 100%; }}
-.kv {{ display: flex; justify-content: space-between; font-size: 13px; padding: 3px 0; border-bottom: 1px solid #21262d; }}
-.turn {{ font-size: 12px; margin: 4px 0; padding: 6px 8px; border-radius: 6px; background: #0d1117; transition: opacity .35s ease; }}
+.kv {{ display: flex; justify-content: space-between; font-size: 13px; padding: 4px 0; border-bottom: 1px solid #f0f0f0; }}
+.turn {{ font-size: 12px; margin: 4px 0; padding: 6px 8px; border-radius: 8px; background: #f6f6f6; transition: opacity .35s ease; }}
 .replay {{ margin-top: 4px; }}
 .spin {{ color: var(--muted); padding: 20px; }}
-.specmode {{ float: right; display: inline-flex; gap: 4px; }}
-.modebtn {{ opacity: .55; }}
-.modebtn.active {{ opacity: 1; border-color: var(--blue); }}
-.spec-form {{ padding: 10px 12px; overflow-y: auto; max-height: 46%; }}
-.spec-form .fld {{ display: block; font-size: 12px; color: var(--muted); margin: 10px 0 4px; }}
-.spec-form input {{ width: 100%; background: #0d1117; color: var(--text); border: 1px solid var(--border);
-  border-radius: 6px; padding: 7px 9px; font-size: 13px; margin-top: 4px; }}
+
+/* Spec editor */
+.specmode {{ float: right; display: inline-flex; gap: 2px; background: #f0f1f3; border-radius: 8px; padding: 2px; }}
+.modebtn {{ border: none !important; background: transparent; opacity: .7; border-radius: 6px; }}
+.modebtn.active {{ opacity: 1; background: var(--panel); box-shadow: var(--shadow-sm); }}
+.spec-form {{ padding: 10px 14px; overflow-y: auto; max-height: 44%; }}
+.spec-form .fld {{ display: block; font-size: 12px; color: var(--muted); margin: 12px 0 4px; }}
+.spec-form input {{ width: 100%; margin-top: 4px; }}
 .cap-row {{ display: flex; gap: 6px; margin: 5px 0; }}
 .cap-row input {{ margin-top: 0; }}
-.cap-row .rm {{ cursor: pointer; color: var(--muted); padding: 6px; }}
-.cap-row .rm:hover {{ color: #f85149; }}
-.guard-row {{ display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: 13px; color: var(--text); }}
-.guard-row input[type=checkbox] {{ width: auto; margin: 0; }}
-.guard-row .thr {{ width: 90px; margin: 0 0 0 auto; }}
+.cap-row .rm, .tool-row .rm {{ cursor: pointer; color: var(--muted); padding: 6px; }}
+.cap-row .rm:hover, .tool-row .rm:hover {{ color: var(--red); }}
+.guard-row {{ display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: 13px; }}
+.guard-row input[type=checkbox] {{ width: auto; margin: 0; accent-color: var(--blue); }}
+.guard-row .thr {{ width: 88px; margin: 0 0 0 auto; }}
 .guard-row .glabel {{ flex: 1; }}
-.ship-group {{ display: inline-flex; gap: 0; align-items: stretch; }}
-.ship-group select {{ background: #0d1117; color: var(--text); border: 1px solid var(--border);
-  border-right: none; border-radius: 6px 0 0 6px; padding: 6px 8px; font-size: 12px; }}
-.ship-group button {{ border-radius: 0 6px 6px 0; }}
-.mini {{ padding: 3px 9px !important; font-size: 12px; }}
-.tool-row {{ display: flex; align-items: center; gap: 8px; padding: 8px 6px; border-bottom: 1px solid #21262d; }}
+
+/* Tools list */
+.tool-row {{ display: flex; align-items: center; gap: 8px; padding: 8px 6px; border-bottom: 1px solid #f0f0f0; }}
 .tool-row .tname {{ flex: 1; font-size: 13px; }}
-.tool-row .rm {{ cursor: pointer; color: var(--muted); font-size: 15px; }}
-.tool-row .rm:hover {{ color: #f85149; }}
+.tool-row .rm {{ font-size: 15px; }}
 .risk-chip {{ font-size: 10px; padding: 2px 7px; border-radius: 9px; cursor: pointer; border: 1px solid var(--border);
-  color: var(--muted); user-select: none; }}
-.risk-chip.on-money {{ background: rgba(210,153,34,.18); color: #d29922; border-color: #d29922; }}
-.risk-chip.on-high_risk {{ background: rgba(248,81,73,.16); color: #f85149; border-color: #f85149; }}
-.risk-chip.on-external {{ background: rgba(88,166,255,.16); color: #58a6ff; border-color: #58a6ff; }}
-.risk-chip.on-pii {{ background: rgba(163,113,247,.18); color: #a371f7; border-color: #a371f7; }}
-.overlay {{ position: fixed; inset: 0; background: rgba(6,8,13,.75); z-index: 90; display: none;
-  align-items: center; justify-content: center; }}
+  color: var(--muted); background: #fafafa; user-select: none; }}
+.risk-chip.on-money {{ background: rgba(207,138,0,.14); color: var(--amber); border-color: rgba(207,138,0,.4); }}
+.risk-chip.on-high_risk {{ background: rgba(224,62,26,.10); color: var(--red); border-color: rgba(224,62,26,.35); }}
+.risk-chip.on-external {{ background: rgba(13,153,255,.10); color: var(--blue); border-color: rgba(13,153,255,.35); }}
+.risk-chip.on-pii {{ background: rgba(123,97,255,.12); color: var(--purple); border-color: rgba(123,97,255,.35); }}
+
+/* Modals + overlays */
+.overlay {{ position: fixed; inset: 0; background: rgba(30,30,30,.28); backdrop-filter: blur(2px);
+  z-index: 96; display: none; align-items: center; justify-content: center; }}
 .overlay.open {{ display: flex; }}
-.modal {{ background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+.modal {{ background: var(--panel); border: 1px solid var(--border); border-radius: 16px;
   width: 560px; max-width: 94vw; max-height: 86vh; overflow: hidden; display: flex; flex-direction: column;
-  box-shadow: 0 24px 60px rgba(0,0,0,.5); }}
+  box-shadow: var(--shadow-lg); }}
 .modal .mhead {{ padding: 16px 18px 0; border-bottom: 1px solid var(--border); }}
 .modal .mclose {{ float: right; cursor: pointer; color: var(--muted); font-size: 18px; }}
 .modal .tabs {{ display: flex; gap: 4px; margin-top: 12px; }}
@@ -680,103 +752,101 @@ textarea {{ width: 100%; height: 46%; background: #0d1117; color: var(--text);
   color: var(--muted); padding: 8px 12px; }}
 .modal .tab.active {{ color: var(--text); border-bottom-color: var(--blue); }}
 .modal .mbody {{ padding: 16px 18px; overflow-y: auto; }}
-.modal input[type=text], .modal #ct-name {{ width: 100%; background: #0f1219; color: var(--text);
-  border: 1px solid var(--border); border-radius: 8px; padding: 9px 11px; font-size: 13px; }}
 .risk-toggles {{ display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; font-size: 13px; }}
 .risk-toggles label {{ display: flex; align-items: center; gap: 6px; cursor: pointer; }}
-.mcp-server {{ border: 1px solid var(--border); border-radius: 10px; margin: 8px 0; overflow: hidden; }}
+.mcp-server {{ border: 1px solid var(--border); border-radius: 12px; margin: 8px 0; overflow: hidden; }}
 .mcp-server > .sh {{ display: flex; align-items: center; gap: 8px; padding: 10px 12px; cursor: pointer; }}
-.mcp-server > .sh:hover {{ background: #232937; }}
+.mcp-server > .sh:hover {{ background: #f2f6fb; }}
 .mcp-server .sname {{ font-weight: 600; }}
 .mcp-server .sdesc {{ font-size: 12px; color: var(--muted); }}
 .mcp-tools {{ display: none; padding: 4px 12px 10px; }}
 .mcp-tools.open {{ display: block; }}
 .mcp-tools label {{ display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 13px; cursor: pointer; }}
 .mcp-tools .rf {{ font-size: 10px; color: var(--muted); margin-left: auto; }}
-.projbar {{ display: flex; gap: 6px; align-items: center; }}
-.projbar select {{ background: #0d1117; color: var(--text); border: 1px solid var(--border);
-  border-radius: 6px; padding: 6px 10px; font-size: 13px; max-width: 220px; }}
-.projbar button {{ padding: 6px 10px; }}
-#board {{ position: fixed; inset: 0; background: rgba(1,4,9,.82); z-index: 80; display: none;
-  overflow-y: auto; padding: 40px 24px; }}
+
+/* Multi-agent board */
+#board {{ position: fixed; inset: 0; background: rgba(245,245,245,.9); backdrop-filter: blur(4px);
+  z-index: 94; display: none; overflow-y: auto; padding: 48px 24px; }}
 #board.open {{ display: block; }}
 #board .board-inner {{ max-width: 1080px; margin: 0 auto; }}
-#board h2 {{ font-size: 22px; margin-bottom: 4px; }}
+#board h2 {{ font-size: 22px; margin-bottom: 4px; color: var(--text); }}
 #board .sub {{ color: var(--muted); margin-bottom: 20px; font-size: 13px; }}
 .board-grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }}
-.pcard {{ background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
-  padding: 16px; cursor: pointer; transition: border-color .15s, transform .15s; position: relative; }}
-.pcard:hover {{ border-color: var(--blue); transform: translateY(-2px); }}
-.pcard.active {{ border-color: var(--purple); box-shadow: 0 0 0 1px var(--purple); }}
+.pcard {{ background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+  padding: 16px; cursor: pointer; transition: border-color .15s, transform .15s, box-shadow .15s; position: relative; }}
+.pcard:hover {{ border-color: var(--blue); transform: translateY(-2px); box-shadow: var(--shadow-md); }}
+.pcard.active {{ border-color: var(--blue); box-shadow: 0 0 0 2px rgba(13,153,255,.25); }}
 .pcard h3 {{ font-size: 15px; margin-bottom: 10px; padding-right: 60px; }}
-.pcard .grade {{ position: absolute; top: 14px; right: 14px; font-weight: 700; font-size: 20px; }}
+.pcard .grade {{ position: absolute; top: 14px; right: 16px; font-weight: 700; font-size: 20px; }}
 .pcard .pmeta {{ font-size: 12px; color: var(--muted); }}
 .pcard .ship {{ display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 10px; margin-top: 8px; }}
-.pcard .ship.yes {{ background: rgba(46,160,67,.18); color: #3fb950; }}
-.pcard .ship.no {{ background: rgba(248,81,73,.16); color: #f85149; }}
+.pcard .ship.yes {{ background: rgba(20,174,92,.14); color: var(--green); }}
+.pcard .ship.no {{ background: rgba(224,62,26,.12); color: var(--red); }}
 .board-add {{ display: flex; align-items: center; justify-content: center; border-style: dashed;
   color: var(--muted); font-size: 14px; min-height: 110px; }}
 #board .bclose {{ position: absolute; top: 20px; right: 28px; font-size: 26px; cursor: pointer; color: var(--muted); }}
 </style></head>
 <body>
-<header style="flex-wrap:wrap">
-  <h1>⚡ AgentProof Studio</h1>
+<header>
+  <h1>⚡ AgentProof</h1>
   <div class="projbar">
     <select id="project-select" title="Switch agent"></select>
-    <button id="btn-newproj" title="New agent">＋</button>
-    <button id="btn-delproj" title="Delete this agent">🗑</button>
-    <button id="btn-board" title="Multi-agent dashboard">▦ Board</button>
+    <button id="btn-newproj" class="ghost iconbtn" title="New agent">＋</button>
+    <button id="btn-delproj" class="ghost iconbtn" title="Delete this agent">🗑</button>
   </div>
   <span class="chip" id="verdict"><b>—</b></span>
   <div class="toolbar">
-    <button id="btn-build" class="primary">Build from spec</button>
-    <button id="btn-import">Import agent…</button>
-    <button id="btn-simulate">▶ Simulate</button>
-    <button id="btn-autofix">🛠 Auto-fix</button>
-    <button id="btn-policy">Policy lines</button>
-    <span class="ship-group">
-      <select id="export-fw" title="Target framework">
-        <option value="langgraph">LangGraph</option>
-        <option value="openai">OpenAI Agents SDK</option>
-        <option value="crewai">CrewAI</option>
-        <option value="typescript">TypeScript</option>
-        <option value="langchain">LangChain</option>
-        <option value="autogen">AutoGen</option>
-        <option value="pydantic-ai">Pydantic AI</option>
-        <option value="agno">Agno</option>
-        <option value="google-adk">Google ADK</option>
-        <option value="semantic-kernel">Semantic Kernel</option>
-      </select>
-      <button id="btn-export">Export ↧</button>
-    </span>
-    <span class="ship-group">
-      <select id="deploy-target" title="Deploy target">
-        <option value="docker">Docker</option>
-        <option value="flyio">Fly.io</option>
-        <option value="railway">Railway</option>
-        <option value="render">Render</option>
-        <option value="cloudrun">Cloud Run</option>
-        <option value="modal">Modal</option>
-        <option value="heroku">Heroku</option>
-        <option value="all">All targets</option>
-      </select>
-      <button id="btn-deploy">Deploy 🚀</button>
-    </span>
+    <button id="btn-import" class="ghost">Import…</button>
+    <button id="btn-board" class="ghost" title="Multi-agent dashboard">▦ Board</button>
+    <div class="menu">
+      <button id="analyze-toggle">🔬 Analyze ▾</button>
+      <div class="panel-pop" id="analyze-menu">
+        <button id="btn-fullaudit" class="menu-item" style="font-weight:600;color:var(--purple)">⚡ Full audit</button>
+        <div class="menu-sep"></div>
+        <button class="menu-item cbtn" data-act="prove">🔒 Prove</button>
+        <button class="menu-item cbtn" data-act="coverage">📊 Coverage 2.0</button>
+        <button class="menu-item cbtn" data-act="mutate">🧬 Mutation</button>
+        <button class="menu-item cbtn" data-act="cost">💰 Cost</button>
+        <button class="menu-item cbtn" data-act="redteam">🎯 Red-team</button>
+        <button class="menu-item cbtn" data-act="audit">🤖 AI Audit</button>
+        <button class="menu-item cbtn" data-act="compliance">📋 Compliance</button>
+      </div>
+    </div>
+    <div class="menu">
+      <button id="ship-toggle" class="primary">Ship ▾</button>
+      <div class="panel-pop" id="ship-menu">
+        <div class="menu-row">
+          <select id="export-fw" title="Target framework">
+            <option value="langgraph">LangGraph</option>
+            <option value="openai">OpenAI Agents SDK</option>
+            <option value="crewai">CrewAI</option>
+            <option value="typescript">TypeScript</option>
+            <option value="langchain">LangChain</option>
+            <option value="autogen">AutoGen</option>
+            <option value="pydantic-ai">Pydantic AI</option>
+            <option value="agno">Agno</option>
+            <option value="google-adk">Google ADK</option>
+            <option value="semantic-kernel">Semantic Kernel</option>
+          </select>
+          <button id="btn-export">Export</button>
+        </div>
+        <div class="menu-row">
+          <select id="deploy-target" title="Deploy target">
+            <option value="docker">Docker</option>
+            <option value="flyio">Fly.io</option>
+            <option value="railway">Railway</option>
+            <option value="render">Render</option>
+            <option value="cloudrun">Cloud Run</option>
+            <option value="modal">Modal</option>
+            <option value="heroku">Heroku</option>
+            <option value="all">All targets</option>
+          </select>
+          <button id="btn-deploy">Deploy</button>
+        </div>
+      </div>
+    </div>
   </div>
 </header>
-<div class="console-bar">
-  <button id="btn-fullaudit" class="cbtn" style="background:#8957e5;border-color:#a371f7;color:#fff;font-weight:600">⚡ Full audit</button>
-  <button id="analyze-toggle" class="cbtn">🔬 Analyze ▾</button>
-  <span id="analyze-menu" class="analyze-menu">
-    <button class="cbtn" data-act="prove">🔒 Prove</button>
-    <button class="cbtn" data-act="coverage">📊 Coverage</button>
-    <button class="cbtn" data-act="mutate">🧬 Mutation</button>
-    <button class="cbtn" data-act="cost">💰 Cost</button>
-    <button class="cbtn" data-act="redteam">🎯 Red-team</button>
-    <button class="cbtn" data-act="audit">🤖 AI Audit</button>
-    <button class="cbtn" data-act="compliance">📋 Compliance</button>
-  </span>
-</div>
 <div class="layout">
   <div class="panel" style="display:flex;flex-direction:column">
     <h2>Behavior spec
@@ -789,36 +859,45 @@ textarea {{ width: 100%; height: 46%; background: #0d1117; color: var(--text);
       <label class="fld">Agent name<input id="sp-name" placeholder="e.g. Payments Ops Agent"></label>
       <div class="fld">Capabilities <span class="muted">(what it can do)</span>
         <div id="sp-caps"></div>
-        <button id="sp-addcap" class="mini">＋ Add capability</button>
+        <button id="sp-addcap" class="ghost mini">＋ Add capability</button>
       </div>
       <div class="fld">Guardrails <span class="muted">(what it must never do)</span>
         <div id="sp-guards"></div>
       </div>
-      <button id="btn-build-visual" class="primary" style="margin-top:8px">Build this agent →</button>
+      <button id="btn-build-visual" class="primary" style="margin-top:10px;width:100%">Build this agent →</button>
     </div>
     <textarea id="spec" style="display:none"></textarea>
     <h2>Simulation arena</h2>
     <div id="scenarios" style="flex:1;overflow-y:auto"></div>
   </div>
-  <div class="panel" id="canvas-wrap"><h2>Agent canvas</h2><svg id="graph"></svg></div>
+  <div class="panel" id="canvas-wrap">
+    <h2>Agent canvas <button id="btn-policy" class="ghost mini" style="float:right">Policy lines</button></h2>
+    <svg id="graph"></svg>
+  </div>
   <div class="panel">
-    <h2>🔧 Tools <button id="btn-addtool" class="mini" style="float:right">＋ Add tool</button></h2>
+    <h2>🔧 Tools <button id="btn-addtool" class="ghost mini" style="float:right">＋ Add</button></h2>
     <div class="detail" id="tools"><p class="muted">Build an agent to edit its tools.</p></div>
     <h2>Agent score</h2><div class="scorebar" id="score"></div>
     <h2>Run it live</h2>
     <div class="detail">
       <div style="display:flex;gap:6px">
-        <input id="run-msg" placeholder="Message the agent…" style="flex:1;background:#0d1117;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px">
+        <input id="run-msg" placeholder="Message the agent…" style="flex:1">
         <button id="btn-run">Run</button>
       </div>
       <label style="font-size:12px;color:var(--muted);display:block;margin-top:6px">
-        <input type="checkbox" id="run-approve"> simulate human approval
+        <input type="checkbox" id="run-approve" style="accent-color:var(--blue)"> simulate human approval
       </label>
       <div id="run-out"></div>
     </div>
     <h2>Details</h2><div class="detail" id="detail"><p class="muted">Build an agent to begin.</p></div>
     <div id="fixes"></div>
   </div>
+</div>
+<div class="dock">
+  <button id="btn-build" class="primary">Build</button>
+  <div class="sep"></div>
+  <button id="btn-simulate">▶ Simulate</button>
+  <button id="btn-autofix">🛠 Auto-fix</button>
 </div>
 <input type="file" id="file" style="display:none" accept=".py,.json">
 <div id="console"><div class="chead"><b id="ctitle">Console</b><span class="close" id="cclose">✕</span></div>
@@ -861,6 +940,7 @@ textarea {{ width: 100%; height: 46%; background: #0d1117; color: var(--text);
 <script>{CANVAS_JS}</script>
 <script>
 let STATE = null;
+window.NODE_FILL = '#ffffff';  // light canvas nodes for the Figma theme
 const svg = document.getElementById('graph');
 const $ = id => document.getElementById(id);
 
@@ -1049,12 +1129,14 @@ $('btn-autofix').addEventListener('click', async () => {{
 }});
 $('btn-export').addEventListener('click', async () => {{
   const fw = $('export-fw').value;
+  closeMenus();
   toast('Exporting ' + fw + '… (may call the model for unusual frameworks)');
   try {{ const r = await api('/api/export', {{framework: fw}}); toast('Exported ' + r.files.length + ' ' + fw + ' files → ' + r.exported_to); }}
   catch (e) {{ toast(e.message); }}
 }});
 $('btn-deploy').addEventListener('click', async () => {{
   const t = $('deploy-target').value;
+  closeMenus();
   try {{ const r = await api('/api/deploy', {{target: t}}); toast('Deploy artifacts (' + t + '): ' + r.files.length + ' files → ' + r.deployed_to); }}
   catch (e) {{ toast(e.message); }}
 }});
@@ -1168,7 +1250,7 @@ const STEP_ICONS = {{guard:'🛡',condition:'⚖',approval:'✋',tool:'🔧',pla
 async function animateFlow(trace) {{
   if (!STATE || !STATE.graph || !trace || !trace.length) return;
   if (typeof resetEdges === 'function') resetEdges(svg);
-  svg.querySelectorAll('.node rect').forEach(r => r.setAttribute('fill', '#161b22'));
+  svg.querySelectorAll('.node rect').forEach(r => r.setAttribute('fill', window.NODE_FILL || '#161b22'));
   const ids = trace.map(s => s.node_id).filter(Boolean);
   const violated = false;
   for (let i = 0; i < ids.length; i++) {{
@@ -1322,14 +1404,26 @@ function fullAuditHtml(d) {{
 const TITLES = {{prove:'🔒 Reachability proofs', coverage:'📊 Risk coverage', mutate:'🧬 Mutation testing',
   cost:'💰 Cost', redteam:'🎯 Red-team', audit:'🤖 Autonomous audit', compliance:'📋 Compliance'}};
 $('btn-fullaudit').addEventListener('click', async () => {{
+  closeMenus();
   if (!STATE || !STATE.graph) return toast('Build an agent first');
   openConsole('⚡ Full audit', '<div class="spin">running the full audit — proofs, coverage, mutation, cost, red-team, AI audit, compliance… (may call the model)</div>');
   try {{ const d = await api('/api/full-audit', {{}}); openConsole('⚡ Full audit report', fullAuditHtml(d)); }}
   catch (e) {{ openConsole('⚡ Full audit', '<div class="violation">'+e.message+'</div>'); }}
 }});
-$('analyze-toggle').addEventListener('click', () => $('analyze-menu').classList.toggle('open'));
+// ---- header dropdown menus (Analyze / Ship) ----
+function closeMenus() {{ document.querySelectorAll('.menu.open').forEach(x => x.classList.remove('open')); }}
+document.querySelectorAll('.menu').forEach(m => {{
+  m.querySelector('button').addEventListener('click', e => {{
+    e.stopPropagation();
+    const willOpen = !m.classList.contains('open'); closeMenus(); if (willOpen) m.classList.add('open');
+  }});
+}});
+// Keep a menu open while interacting with its selects; outside click closes.
+document.querySelectorAll('.panel-pop').forEach(p => p.addEventListener('click', e => e.stopPropagation()));
+document.addEventListener('click', closeMenus);
 document.querySelectorAll('.cbtn[data-act]').forEach(btn => btn.addEventListener('click', async () => {{
   const act = btn.dataset.act;
+  closeMenus();
   if (!STATE || !STATE.graph) return toast('Build an agent first');
   openConsole(TITLES[act], '<div class="spin">running ' + act + '…' + (act==='audit'||act==='redteam'?' (may call the model)':'') + '</div>');
   try {{ const d = await api('/api/' + act, {{}}); openConsole(TITLES[act], RENDER[act](d)); }}
