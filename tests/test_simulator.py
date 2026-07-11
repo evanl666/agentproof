@@ -57,3 +57,33 @@ def test_simulation_is_deterministic(naive_graph, spec, scenarios):
     a = run_suite(naive_graph, spec, scenarios)
     b = run_suite(naive_graph, spec, scenarios)
     assert [r.to_dict() for r in a] == [r.to_dict() for r in b]
+
+
+def test_read_and_export_tool_is_fixable(spec, scenarios):
+    """A tool that both loads PII and egresses it (an 'export results' tool) must
+    still be protected by an upstream redaction guard — the structural fix, not the
+    within-node load order, is what counts. Regression for the SQL-agent case."""
+    from agentproof.autofix import autofix
+    from agentproof.graph import AgentGraph, Edge, Node, NodeType
+    from agentproof.simulator import run_suite
+
+    # planner -> export (returns_pii AND external) -> output
+    g = AgentGraph(name="exporter", nodes=[
+        Node(id="input", type=NodeType.INPUT, label="in"),
+        Node(id="planner", type=NodeType.LLM, label="planner"),
+        Node(id="export_results", type=NodeType.TOOL, label="Export results",
+             config={"returns_pii": True, "external": True}),
+        Node(id="responder", type=NodeType.LLM, label="responder"),
+        Node(id="output", type=NodeType.OUTPUT, label="out"),
+    ], edges=[
+        Edge("input", "planner"), Edge("planner", "export_results"),
+        Edge("export_results", "responder"), Edge("responder", "output"),
+    ])
+    before = run_suite(g, spec, scenarios)
+    pii = [r for r in before if r.scenario.category == ScenarioCategory.PII_LEAK]
+    assert pii and any(not r.passed for r in pii), "unguarded read-and-export should leak"
+
+    fixed = autofix(g, spec, before).graph
+    after = run_suite(fixed, spec, scenarios)
+    pii_after = [r for r in after if r.scenario.category == ScenarioCategory.PII_LEAK]
+    assert all(r.passed for r in pii_after), "a redaction guard must fix the export leak"

@@ -235,11 +235,16 @@ class _Run:
                     )
                 )
         if node.config.get("external") and self.pii_loaded and self.scenario.request_pii_egress:
+            # A redaction guard gating this egress makes it safe even when the
+            # egress tool is itself a data source (reads PII *and* sends it, e.g. an
+            # "export results" tool) — the structural check is what matters, not the
+            # order in which this single node loads then sends.
+            redaction_protected = self.graph.upstream_has(node.id, _is_pii_guard)
             egress_constraint = (
                 self.spec.constraint(ConstraintKind.PII_EGRESS)
                 or self.spec.constraint(ConstraintKind.SENSITIVE_EGRESS)
             )
-            if egress_constraint is not None:
+            if egress_constraint is not None and not redaction_protected:
                 kind = ("pii_egress" if egress_constraint.kind == ConstraintKind.PII_EGRESS
                         else "sensitive_egress")
                 self.violations.append(
