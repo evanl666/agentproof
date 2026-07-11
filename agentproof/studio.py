@@ -801,8 +801,12 @@ button.primary:hover {{ background: #0a86e0; border-color: #0a86e0; }}
 .layout > .panel:last-child {{ border-left: 1px solid var(--border); }}
 .panel h2 {{ font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
   padding: 12px 14px 8px; border-bottom: 1px solid var(--border); background: var(--panel); font-weight: 600; }}
-#canvas-wrap {{ background: var(--bg); }}
+#canvas-wrap {{ background: var(--bg); position: relative; }}
 #canvas-wrap h2 {{ background: transparent; border-bottom: none; }}
+#canvas-empty {{ position: absolute; inset: 40px 0 0; display: flex; align-items: center;
+  justify-content: center; text-align: center; pointer-events: none; }}
+#canvas-empty .empty-card {{ pointer-events: auto; background: var(--panel); border: 1px solid var(--border);
+  border-radius: 16px; padding: 30px 34px; box-shadow: var(--shadow-md); }}
 .detail {{ padding: 10px 14px; }}
 .scenario {{ padding: 8px 14px; border-bottom: 1px solid #f0f0f0; }}
 .scenario:hover, .scenario.active {{ background: #f2f6fb; }}
@@ -1024,6 +1028,14 @@ input:focus, textarea:focus, select:focus {{ border-color: var(--blue) !importan
   <div class="panel" id="canvas-wrap">
     <h2>Agent canvas <button id="btn-policy" class="ghost mini" style="float:right">Policy lines</button></h2>
     <svg id="graph"></svg>
+    <div id="canvas-empty">
+      <div class="empty-card">
+        <div style="font-size:34px">🧩</div>
+        <h3 style="margin:8px 0 4px;font-size:16px">Describe your agent to start</h3>
+        <p class="muted" style="max-width:320px;margin:0 auto 14px">Tell AgentProof what it should do — it designs the tools, finds the safety holes, and fixes them.</p>
+        <button class="primary" id="empty-cta">✨ Describe your agent</button>
+      </div>
+    </div>
   </div>
   <div class="panel">
     <div id="issues"></div>
@@ -1143,9 +1155,12 @@ function render() {{
   if (!STATE) return;
   $('spec').value = STATE.spec_text || '';
   if (STATE.graph) renderGraph(svg, STATE.graph, showNode);
+  const ce = $('canvas-empty'); if (ce) ce.style.display = STATE.graph ? 'none' : 'flex';
   renderTools();
-  if (typeof renderSpecForm === 'function' && specMode === 'visual') renderSpecForm();
-  if (typeof renderStepper === 'function') {{ renderStepper(); renderIssues(); }}
+  try {{
+    if (typeof renderSpecForm === 'function' && specMode === 'visual') renderSpecForm();
+    if (typeof renderStepper === 'function') {{ renderStepper(); renderIssues(); }}
+  }} catch (e) {{ console.error('render panel error', e); }}
   const list = $('scenarios'); list.innerHTML = '';
   const results = STATE.results || [];
   const byId = {{}};
@@ -1850,7 +1865,17 @@ $('mode-toggle').addEventListener('click', () => {{
   $('mode-toggle').textContent = document.body.classList.contains('ide-mode') ? 'IDE' : 'Guided';
 }});
 
-api('/api/state').then(s => {{ STATE = s; render(); if (!STATE.graph) openCreate(); }});
+// Never trap the user: any overlay closes on backdrop-click or Esc.
+document.querySelectorAll('.overlay').forEach(o => o.addEventListener('click', e => {{ if (e.target === o) o.classList.remove('open'); }}));
+document.addEventListener('keydown', e => {{
+  if (e.key === 'Escape') {{
+    document.querySelectorAll('.overlay.open').forEach(x => x.classList.remove('open'));
+    $('board').classList.remove('open'); CONSOLE.classList.remove('open'); closeMenus();
+  }}
+}});
+$('empty-cta').addEventListener('click', openCreate);
+
+api('/api/state').then(s => {{ STATE = s; render(); }});
 loadProjects();
 </script>
 </body></html>"""
